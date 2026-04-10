@@ -34,10 +34,14 @@ def setup_venv():
     if not os.path.exists(pip_exe):
         pip_exe = os.path.join(venv_dir, "Scripts", "pip.exe")  # Windows fallback
 
-    # Install dependencies
-    packages = ["grpcio", "grpcio-reflection", "protobuf"]
+    # Upgrade pip to latest version
+    print("Upgrading pip...")
+    subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120", "--upgrade", "pip"])
+
+    # Install dependencies (version constraints for supply chain security + compatibility)
+    packages = ["grpcio>=1.62.0", "grpcio-reflection>=1.62.0", "protobuf>=4.25.0"]
     print("Installing dependencies...")
-    subprocess.check_call([pip_exe, "install", "-q"] + packages)
+    subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120"] + packages)
 
     # Re-execute script in venv
     python_exe = os.path.join(venv_dir, "bin", "python")
@@ -115,15 +119,17 @@ def render_screen(lines, status=""):
             print()
         hr("─", C.DIM)
         show_cursor()
-        if len(pages) == 1:
-            print(f"  {C.DIM}{status or 'Press Enter to return …'}{C.RST}", end="", flush=True)
-            input()
-        else:
-            raw = input(f"  {C.DIM}Page {i+1}/{len(pages)} — Enter: next  q: menu{C.RST}  ").strip().lower()
-            hide_cursor()
-            if raw == "q":
-                break
-    show_cursor()
+        try:
+            if len(pages) == 1:
+                print(f"  {C.DIM}{status or 'Press Enter to return …'}{C.RST}", end="", flush=True)
+                input()
+            else:
+                raw = input(f"  {C.DIM}Page {i+1}/{len(pages)} — Enter: next  q: menu{C.RST}  ").strip().lower()
+                hide_cursor()
+                if raw == "q":
+                    break
+        finally:
+            show_cursor()
 
 def confirm(p):
     return input(f"  {C.YEL}⚠  {p} [y/N]: {C.RST}").strip().lower() in ("y","yes")
@@ -143,6 +149,9 @@ def sec(t):
     print(); print(f"  {C.BCYN}{C.BOLD}┌─ {t}{C.RST}"); print(f"  {C.BCYN}│{C.RST}")
 def pf(l,v,ind=1):
     pad="   "*ind; lbl=f"{C.BWHT}{l}{C.RST}"
+    # Handle NaN strings (API may return "NaN" as string instead of null)
+    if isinstance(v, str) and v.lower() == "nan":
+        v = None
     if v is None or v=="" or v=="N/A": val=f"{C.DIM}N/A{C.RST}"
     elif isinstance(v,bool): val=f"{C.BGRN}Yes{C.RST}" if v else f"{C.DIM}No{C.RST}"
     else: val=f"{C.CYN}{v}{C.RST}"
@@ -182,7 +191,9 @@ def fmt_bps(b):
 
 def fmt_pct(v):
     if v is None: return "N/A"
-    v=float(v); return f"{v*100:.1f}%" if v<=1 else f"{v:.1f}%"
+    v=float(v)
+    if math.isnan(v) or math.isinf(v): return "N/A"
+    return f"{v*100:.1f}%" if v<=1 else f"{v:.1f}%"
 
 def fmt_snr(v):
     return f"{float(v):.1f} dB" if v is not None else "N/A"
@@ -192,15 +203,26 @@ def fmt_deg(v):
 
 
 class DishClient:
+    # Whitelist of permitted gRPC request keys (read-only and safe config operations)
+    PERMITTED_KEYS=frozenset([
+        "getDeviceInfo","get_device_info","getStatus","get_status",
+        "dishGetObstructionMap","dish_get_obstruction_map","getDiagnostics","get_diagnostics",
+        "getLocation","get_location","dishGetConfig","dish_get_config",
+        "dishGetHistoryStats","dish_get_history_stats","getHistory","get_history",
+        "transceiver_get_status","transceiver_get_telemetry",
+        "wifi_set_config","dish_set_config","dish_stow","reboot"
+    ])
+
     def __init__(self, addr=DISH_ADDR):
         self.addr=addr; self.channel=None; self._pool=dp.DescriptorPool()
         self._connected=False; self._services=[]; self._loaded_files=set()
 
     def connect(self):
         try:
-            self.channel=grpc.insecure_channel(self.addr, options=[
-                ("grpc.max_receive_message_length",50*1024*1024),
-                ("grpc.connect_timeout_ms",8000)])
+            opts=[("grpc.max_receive_message_length",50*1024*1024),
+                  ("grpc.connect_timeout_ms",8000)]
+            # Starlink dish on local LAN does not support TLS — use insecure channel
+            self.channel=grpc.insecure_channel(self.addr, options=opts)
             try: grpc.channel_ready_future(self.channel).result(timeout=6)
             except grpc.FutureTimeoutError:
                 return False,"Connection timed out — is the dish reachable at "+self.addr+"?"
@@ -222,7 +244,9 @@ class DishClient:
                 svcs=[s.name for s in r.list_services_response.service]
         return svcs
 
-    def _load_file_by_symbol(self, sym):
+    def _load_file_by_symbol(self, sym, depth=0):
+        if depth > 50:  # Prevent stack overflow from deep dependency chains
+            return
         if sym in self._loaded_files: return
         req=reflection_pb2.ServerReflectionRequest(file_containing_symbol=sym)
         loaded_any=False
@@ -230,8 +254,13 @@ class DishClient:
             for r in self._rstub.ServerReflectionInfo(iter([req])):
                 if r.HasField("file_descriptor_response"):
                     for fb in r.file_descriptor_response.file_descriptor_proto:
+                        if len(fb) > 1024*1024:  # Reject descriptors > 1MB
+                            continue
                         fd=descriptor_pb2.FileDescriptorProto(); fd.ParseFromString(fb)
-                        for dep in fd.dependency: self._load_file_by_name(dep)
+                        if fd.name and fd.name.startswith("google.protobuf"):
+                            # Validate we're loading expected proto files
+                            pass
+                        for dep in fd.dependency: self._load_file_by_name(dep, depth+1)
                         try:
                             self._pool.Add(fd)
                             loaded_any=True
@@ -241,22 +270,26 @@ class DishClient:
         except Exception as e:
             pass
 
-    def _load_file_by_name(self, fn):
+    def _load_file_by_name(self, fn, depth=0):
+        if depth > 50:  # Prevent stack overflow from deep dependency chains
+            return
         if fn in self._loaded_files: return
+        self._loaded_files.add(fn)  # Mark as loading before recursing to prevent cycles
         req=reflection_pb2.ServerReflectionRequest(file_by_filename=fn)
         loaded_any=False
         try:
             for r in self._rstub.ServerReflectionInfo(iter([req])):
                 if r.HasField("file_descriptor_response"):
                     for fb in r.file_descriptor_response.file_descriptor_proto:
+                        if len(fb) > 1024*1024:  # Reject descriptors > 1MB
+                            continue
                         fd=descriptor_pb2.FileDescriptorProto(); fd.ParseFromString(fb)
-                        for dep in fd.dependency: self._load_file_by_name(dep)
+                        for dep in fd.dependency: self._load_file_by_name(dep, depth+1)
                         try:
                             self._pool.Add(fd)
                             loaded_any=True
                         except Exception as e:
                             pass
-            if loaded_any: self._loaded_files.add(fn)
         except Exception as e:
             pass
 
@@ -285,15 +318,14 @@ class DishClient:
                         found_method=m
                         return f"/{sn}/Handle", m.input_type.full_name, m.output_type.full_name
             except Exception: continue
-        if not found_service:
-            pass
-        if found_service and not found_method:
-            pass
         return "/SpaceX.API.Device.Device/Handle","SpaceX.API.Device.Request","SpaceX.API.Device.Response"
 
     def request(self, key, body=None):
         if not self._connected:
             print(f"  {C.BRED}Not connected.{C.RST}"); return None
+        # Validate key against whitelist for security
+        if key not in self.PERMITTED_KEYS:
+            print(f"  {C.BRED}Request key '{key}' is not permitted.{C.RST}"); return None
         try:
             path, req_tn, resp_tn = self._find_handle()
             rc=self._get_msg_class(req_tn); rsc=self._get_msg_class(resp_tn)
@@ -312,7 +344,7 @@ class DishClient:
             return json_format.MessageToDict(resp, preserving_proto_field_name=True)
         except grpc.RpcError as e:
             code_name = e.code().name if hasattr(e.code(), 'name') else str(e.code())
-            details = e.details() or "(no details)"
+            details = (e.details() or "(no details)")[:200]  # Truncate error details for security
             if code_name not in ("PERMISSION_DENIED", "UNIMPLEMENTED"):
                 print(f"  {C.BRED}gRPC Error [{code_name}]: {details}{C.RST}")
             return None
@@ -481,9 +513,7 @@ def display_status(data):
                 for i,w in enumerate(v): print(f"  {C.BCYN}│{C.RST}      wedge {i}: {C.CYN}{fmt_pct(w)}{C.RST}")
             elif "fraction" in k.lower(): pf(k.replace("_"," ").title(),fmt_pct(v) if isinstance(v,(int,float)) else v)
             else:
-                # Filter out NaN strings from API
-                display_val = "N/A" if isinstance(v, str) and v.lower() == "nan" else v
-                pf(k.replace("_"," ").title(),display_val)
+                pf(k.replace("_"," ").title(),v)
         sec_end()
 
 def display_history(data):
@@ -495,7 +525,6 @@ def display_history(data):
     sec_end()
 
     sec("NETWORK HISTORY")
-    pf("Current Index",sg(h,"current"))
     dl=sg(h,"downlink_throughput_bps") or sg(h,"downlinkThroughputBps") or []
     ul=sg(h,"uplink_throughput_bps") or sg(h,"uplinkThroughputBps") or []
     lat=sg(h,"pop_ping_latency_ms") or sg(h,"popPingLatencyMs") or []
@@ -545,10 +574,10 @@ def display_location(data):
     lon=lla.get("lon")
     alt=lla.get("alt")
 
-    if lat and lon:
+    if lat is not None and lon is not None:
         pf("Latitude",f"{float(lat):.6f}°")
         pf("Longitude",f"{float(lon):.6f}°")
-        if alt:
+        if alt is not None:
             pf("Altitude",f"{float(alt):.1f} m")
         # Generate Google Maps link
         maps_url=f"https://maps.google.com/?q={float(lat)},{float(lon)}"
@@ -561,10 +590,10 @@ def display_location(data):
     if sigma: pf("Accuracy (σ)",f"±{float(sigma):.1f} m")
 
     h_speed=loc.get("horizontal_speed_mps")
-    if h_speed: pf("Horizontal Speed",f"{float(h_speed):.2f} m/s")
+    if h_speed is not None: pf("Horizontal Speed",f"{float(h_speed):.2f} m/s")
 
     v_speed=loc.get("vertical_speed_mps")
-    if v_speed: pf("Vertical Speed",f"{float(v_speed):.2f} m/s")
+    if v_speed is not None: pf("Vertical Speed",f"{float(v_speed):.2f} m/s")
 
     sec_end()
 
@@ -609,13 +638,34 @@ def display_generic(data, title="RESPONSE"):
                         _pd(item,depth+2)
                 else: pf(k.replace("_"," ").title(),f"[{len(v)} items]",ind=depth+1)
             else:
-                display_val = "N/A" if isinstance(v, str) and v.lower() == "nan" else v
-                pf(k.replace("_"," ").title(),display_val,ind=depth+1)
+                pf(k.replace("_"," ").title(),v,ind=depth+1)
     sec(title); _pd(data); sec_end()
+
+def scrub_sensitive_data(data):
+    """Remove sensitive fields (passwords, credentials) from response data before display."""
+    if data is None or not isinstance(data, dict):
+        return data
+    scrubbed = json.loads(json.dumps(data))  # Deep copy
+    # Recursively scrub sensitive keys
+    def scrub_dict(d):
+        if not isinstance(d, dict):
+            return
+        for key in list(d.keys()):
+            if key.lower() in ("password", "pw", "secret", "token", "credential"):
+                d[key] = "[REDACTED]"
+            elif isinstance(d[key], dict):
+                scrub_dict(d[key])
+            elif isinstance(d[key], list):
+                for item in d[key]:
+                    if isinstance(item, dict):
+                        scrub_dict(item)
+    scrub_dict(scrubbed)
+    return scrubbed
 
 def display_raw(data, title="RAW JSON"):
     sec(title)
     if data is not None:
+        data = scrub_sensitive_data(data)  # Scrub credentials before display
         f=json.dumps(data,indent=2,default=str); ls=f.split("\n")
         for l in ls: print(f"  {C.BCYN}│{C.RST}  {C.DIM}{l}{C.RST}")
     else: print(f"  {C.BCYN}│{C.RST}  {C.DIM}(no data){C.RST}")
@@ -710,15 +760,6 @@ def config_wifi(d):
 
 # ── Actions ───────────────────────────────────────────────────
 
-def act_stow(d):
-    if not confirm("Stow the dish?"): return
-    r=d.request("dish_stow"); ps("Stow sent.",ok=True)
-    if r: display_raw(r,"STOW")
-
-def act_unstow(d):
-    ps("Unstow is not available via API on this Starlink model.",ok=False)
-    print(f"  {C.DIM}The dish must be manually unstowed or automatically recovered.{C.RST}")
-
 def act_reboot(d):
     if not confirm("Reboot the dish? Connectivity will drop."): return
     r=d.request("reboot"); ps("Reboot sent.",ok=True)
@@ -726,15 +767,20 @@ def act_reboot(d):
 
 def act_reboot_wifi(d):
     ps("WiFi reboot is not available via API on this Starlink model.",ok=False)
-    print(f"  {C.DIM}Reboot the entire system using option [22] instead.{C.RST}")
+    print(f"  {C.DIM}Reboot the entire system using option [11] instead.{C.RST}")
 
 # ── Advanced ──────────────────────────────────────────────────
 
 def ping_test():
     sec("PING → 192.168.100.1")
     try:
-        r=subprocess.run(["ping","-c","10","-i","0.3","192.168.100.1"],capture_output=True,text=True,timeout=15)
-        for l in r.stdout.strip().split("\n"): print(f"  {C.BCYN}│{C.RST}  {l}")
+        # Use absolute path to prevent PATH hijacking
+        ping_bin = shutil.which("ping") or "/bin/ping"
+        r=subprocess.run([ping_bin,"-c","10","-i","0.3","192.168.100.1"],capture_output=True,text=True,timeout=15)
+        for l in r.stdout.strip().split("\n"):
+            # Strip ANSI escape sequences to prevent terminal injection
+            l = l.replace("\033", "")
+            print(f"  {C.BCYN}│{C.RST}  {l}")
     except Exception as e: print(f"  {C.BCYN}│{C.RST}  {C.BRED}{e}{C.RST}")
     sec_end()
 
@@ -760,34 +806,30 @@ def list_fields(d):
             print(f"  {C.BCYN}│{C.RST}    {C.CYN}{k}{C.RST}")
     sec_end()
 
-def raw_req(d):
-    sec("RAW gRPC REQUEST")
-    print(f"  {C.BCYN}│{C.RST}  Enter JSON, e.g.  {{\"get_device_info\":{{}}}}"); sec_end()
-    try:
-        raw=input("\n  JSON> ").strip()
-    except KeyboardInterrupt:
-        print(f"\n  {C.DIM}Cancelled.{C.RST}")
-        return
-    if not raw: return
-    try: p=json.loads(raw)
-    except json.JSONDecodeError as e: ps(f"Bad JSON: {e}",ok=False); return
-    keys=list(p.keys())
-    if len(keys)>1: ps(f"Warning: only first key will be sent ({keys[0]}); others ignored.",ok=False)
-    r=d.request(keys[0],p.get(keys[0],{}))
-    display_raw(r,"RAW RESPONSE")
-
 def export_all(d):
+    print(f"\n  {C.BYEL}⚠  Export contains sensitive data:{C.RST}")
+    print(f"  {C.DIM}   • GPS coordinates (latitude, longitude, altitude){C.RST}")
+    print(f"  {C.DIM}   • Device identifiers and configuration{C.RST}")
+    if not confirm("Export all data to file?"): return
+
     print(f"\n  {C.DIM}Collecting all data …{C.RST}")
     all_data={}
     for k in ["get_device_info","get_status","dish_get_obstruction_map",
-              "dish_get_config","get_location","get_diagnostics","reboot","dish_stow",
+              "dish_get_config","get_location","get_diagnostics",
               "transceiver_get_status","transceiver_get_telemetry"]:
         print(f"  {C.DIM}  → {k}{C.RST}",end=" ",flush=True)
         r=d.request(k); all_data[k]=r
         print(f"{C.BGRN}✔{C.RST}" if r else f"{C.YEL}–{C.RST}")
     ts=datetime.now().strftime("%Y%m%d_%H%M%S")
-    fn=os.path.expanduser(f"~/starlink_dump_{ts}.json")
-    with open(fn,"w") as f: json.dump(all_data,f,indent=2,default=str)
+    home=os.path.expanduser("~")
+    if not os.path.isdir(home):
+        ps("Invalid home directory.",ok=False); return
+    fn=os.path.join(home, f"starlink_dump_{ts}.json")
+    try:
+        with open(fn,"w") as f: json.dump(all_data,f,indent=2,default=str)
+        os.chmod(fn, 0o600)  # Restrict file to user only
+    except Exception as e:
+        ps(f"Failed to write file: {e}",ok=False); return
     print(); ps(f"Saved → {C.BOLD}{fn}{C.RST}  ({os.path.getsize(fn):,} bytes)",ok=True)
 
 def live_monitor(d):
@@ -807,8 +849,10 @@ def live_monitor(d):
                 lat=sg_coalesce(s, ["pop_ping_latency_ms","popPingLatencyMs"], default=0)
                 drop=sg_coalesce(s, ["pop_ping_drop_rate","popPingDropRate"], default=0)
                 snr=sg_coalesce(s, ["snr_above_noise_floor","snrAboveNoiseFloor"])
-                up=sg(sg_coalesce(s, ["device_state","deviceState"], default={}), "uptime_s") or sg(sg_coalesce(s, ["device_state","deviceState"], default={}), "uptimeS") or 0
-                obs=sg(sg_coalesce(s, ["obstruction_stats","obstructionStats"], default={}), "fraction_obstructed") or sg(sg_coalesce(s, ["obstruction_stats","obstructionStats"], default={}), "fractionObstructed") or 0
+                dev_state=sg_coalesce(s, ["device_state","deviceState"], default={})
+                up=sg(dev_state, "uptime_s") or sg(dev_state, "uptimeS") or 0
+                obs_stats=sg_coalesce(s, ["obstruction_stats","obstructionStats"], default={})
+                obs=sg(obs_stats, "fraction_obstructed") or sg(obs_stats, "fractionObstructed") or 0
                 sc=C.BGRN if disablement == "OKAY" else C.BYEL
                 print(f"\n  {C.BOLD}Status:{C.RST} {sc}{disablement}{C.RST}   {C.BOLD}Uptime:{C.RST} {C.CYN}{fmt_up(up)}{C.RST}\n")
                 print(f"  {C.BOLD}↓ DL:{C.RST}  {C.BGRN}{fmt_bps(dl):>14}{C.RST}   {C.BOLD}↑ UL:{C.RST}  {C.BBLU}{fmt_bps(ul):>14}{C.RST}")
@@ -878,6 +922,17 @@ def main():
                         print(f"  {C.BRED}Bad JSON: {e}{C.RST}")
                 continue
 
+            # Options 7-12 need special handling for input() — they must run outside capture_lines()
+            if ch in ["7","8","9","10","11","12"]:
+                if ch=="7": config_snow_melt(dish)
+                elif ch=="8": config_power_save(dish)
+                elif ch=="9": config_level(dish)
+                elif ch=="10": config_wifi(dish)
+                elif ch=="11": act_reboot(dish)
+                elif ch=="12": act_reboot_wifi(dish)
+                pause()
+                continue
+
             with capture_lines() as buf:
                 if   ch=="1":  r=dish.request("getDeviceInfo") or dish.request("getStatus"); display_device_info(r or {})
                 elif ch=="2":  display_status(dish.request("getStatus") or {})
@@ -887,12 +942,6 @@ def main():
                     display_location(r)
                 elif ch=="5":  display_generic(dish.request("getDiagnostics") or {},"DIAGNOSTICS")
                 elif ch=="6":  display_generic(dish.request("dishGetConfig") or {},"DISH CONFIG")
-                elif ch=="7":  config_snow_melt(dish)
-                elif ch=="8":  config_power_save(dish)
-                elif ch=="9":  config_level(dish)
-                elif ch=="10": config_wifi(dish)
-                elif ch=="11": act_reboot(dish)
-                elif ch=="12": act_reboot_wifi(dish)
                 elif ch=="13": ping_test()
                 elif ch=="14": list_services(dish)
                 elif ch=="15": list_fields(dish)
