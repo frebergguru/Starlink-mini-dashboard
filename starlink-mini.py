@@ -643,18 +643,16 @@ def main_menu(conn):
     mo("9","Set Dish Level Mode","tilt like bracket / force level","📐")
     mo("10","Set WiFi Network","SSID & password","🌐")
     print(); hr("═",C.BCYN); print(f"  {C.BOLD}{C.BWHT} ACTIONS{C.RST}"); hr("─",C.DIM)
-    mo("11","Stow Dish","park for transport","📦")
-    mo("12","Unstow Dish","restore from parked position","📭")
-    mo("13","Reboot Dish","restart the dish","🔄")
-    mo("14","Reboot WiFi","restart the WiFi module","📡")
+    mo("11","Reboot Dish","restart the dish","🔄")
+    mo("12","Reboot WiFi","restart the WiFi module","📡")
     print(); hr("═",C.BCYN); print(f"  {C.BOLD}{C.BWHT} ADVANCED{C.RST}"); hr("─",C.DIM)
-    mo("15","Ping Dish","quick connectivity test","⚡")
-    mo("16","List gRPC Methods","all services & methods","🔍")
-    mo("17","List Request Fields","all API request types","📋")
-    mo("18","Raw gRPC Request","send custom JSON","💻")
-    mo("19","Export All Data","full dump to JSON","💾")
-    mo("20","Continuous Monitor","live status dashboard","📺")
-    mo("21","Reconnect","re-establish gRPC channel","🔗")
+    mo("13","Ping Dish","quick connectivity test","⚡")
+    mo("14","List gRPC Methods","all services & methods","🔍")
+    mo("15","List Request Fields","all API request types","📋")
+    mo("16","Raw gRPC Request","send custom JSON","💻")
+    mo("17","Export All Data","full dump to JSON","💾")
+    mo("18","Continuous Monitor","live status dashboard","📺")
+    mo("19","Reconnect","re-establish gRPC channel","🔗")
     print(); hr("─",C.DIM); mo("q","Quit","","👋"); print()
 
 # ── Config setters ────────────────────────────────────────────
@@ -853,14 +851,14 @@ def main():
             if ch=="q":
                 dish.close(); break
 
-            # Option 20 needs to be outside capture_lines() (it has its own loop)
-            if ch=="20":
+            # Option 18 needs to be outside capture_lines() (it has its own loop)
+            if ch=="18":
                 live_monitor(dish)
                 show_cursor()  # ensure cursor is shown after live_monitor
                 continue
 
-            # Option 18 needs special handling for input(), but output shown via render_screen()
-            if ch=="18":
+            # Option 16 needs special handling for input(), but output shown via render_screen()
+            if ch=="16":
                 try:
                     raw=input("\n  JSON> ").strip()
                 except KeyboardInterrupt:
@@ -893,15 +891,13 @@ def main():
                 elif ch=="8":  config_power_save(dish)
                 elif ch=="9":  config_level(dish)
                 elif ch=="10": config_wifi(dish)
-                elif ch=="11": act_stow(dish)
-                elif ch=="12": act_unstow(dish)
-                elif ch=="13": act_reboot(dish)
-                elif ch=="14": act_reboot_wifi(dish)
-                elif ch=="15": ping_test()
-                elif ch=="16": list_services(dish)
-                elif ch=="17": list_fields(dish)
-                elif ch=="19": export_all(dish)
-                elif ch=="21":
+                elif ch=="11": act_reboot(dish)
+                elif ch=="12": act_reboot_wifi(dish)
+                elif ch=="13": ping_test()
+                elif ch=="14": list_services(dish)
+                elif ch=="15": list_fields(dish)
+                elif ch=="17": export_all(dish)
+                elif ch=="19":
                     print(f"  {C.DIM}Reconnecting …{C.RST}"); dish.close()
                     dish=DishClient(DISH_ADDR); ok,msg=dish.connect()
                     ps("Reconnected." if ok else f"Failed: {msg}",ok=ok)
