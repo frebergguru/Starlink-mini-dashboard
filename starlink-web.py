@@ -282,7 +282,7 @@ def _api_get(path):
         data, err = ROUTER_PROXY.request("wifi_get_config")
         if data is None:
             return 502, {"error": "request failed", "detail": err or "no data"}
-        return 200, {"networks": _extract_wifi_secrets(data)}
+        return 200, {"networks": _extract_wifi_secrets(data), "_raw": data}
 
     if path == "/api/services":
         if not DISH_PROXY.connected:
