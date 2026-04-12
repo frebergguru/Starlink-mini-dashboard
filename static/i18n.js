@@ -14,6 +14,8 @@
     "conn.dish_label": "Dish",
     "conn.router_label": "Router",
     "lang.label": "Language",
+    "lang.en": "English",
+    "lang.nb": "Norwegian",
 
     "nav.sections": "Sections",
     "tabs.telemetry": "Telemetry",
@@ -321,6 +323,8 @@
     "conn.dish_label": "Antenne",
     "conn.router_label": "Ruter",
     "lang.label": "Språk",
+    "lang.en": "Engelsk",
+    "lang.nb": "Norsk",
 
     "nav.sections": "Seksjoner",
     "tabs.telemetry": "Telemetri",
