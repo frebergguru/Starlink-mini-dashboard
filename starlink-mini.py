@@ -15,63 +15,49 @@ Install:
 The script will automatically set up a virtual environment and install dependencies.
 """
 
-import json, subprocess, sys, os, shutil, time, venv, math, io, contextlib
+import json, subprocess, sys, os, shutil, time, venv, math, io, contextlib, importlib.util
 from datetime import datetime
 
+REQUIRED_DEPS = [
+    ("grpc", "grpcio>=1.62.0"),
+    ("grpc_reflection", "grpcio-reflection>=1.62.0"),
+    ("google.protobuf", "protobuf>=4.25.0"),
+]
+
+
+def _venv_bin(venv_dir, name):
+    exe = os.path.join(venv_dir, "bin", name)
+    if os.path.exists(exe):
+        return exe
+    return os.path.join(venv_dir, "Scripts", f"{name}.exe")
+
+
 def setup_venv():
-    """Create venv and install dependencies if not already in one."""
+    """Create the project venv if needed, re-exec into it, then install any missing deps."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     venv_dir = os.path.join(script_dir, "venv")
+    venv_python = _venv_bin(venv_dir, "python")
 
-    # Check if we're already in a virtual environment
-    in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+    if os.path.abspath(sys.executable) != os.path.abspath(venv_python):
+        if not os.path.exists(venv_dir):
+            print(f"Creating virtual environment in {venv_dir}...")
+            venv.create(venv_dir, with_pip=True)
+        venv_python = _venv_bin(venv_dir, "python")
+        print("Launching in virtual environment...\n")
+        os.execv(venv_python, [venv_python, __file__] + sys.argv[1:])
 
-    if in_venv:
-        return  # Already in venv, proceed normally
-
-    # Create venv if it doesn't exist
-    if not os.path.exists(venv_dir):
-        print(f"Creating virtual environment in {venv_dir}...")
-        venv.create(venv_dir, with_pip=True)
-
-    # Determine pip executable
-    pip_exe = os.path.join(venv_dir, "bin", "pip")
-    if not os.path.exists(pip_exe):
-        pip_exe = os.path.join(venv_dir, "Scripts", "pip.exe")  # Windows fallback
-
-    # Upgrade pip to latest version
-    print("Upgrading pip...")
-    subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120", "--upgrade", "pip"])
-
-    # Install dependencies (version constraints for supply chain security + compatibility)
-    packages = ["grpcio>=1.62.0", "grpcio-reflection>=1.62.0", "protobuf>=4.25.0"]
-    print("Installing dependencies...")
-    subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120"] + packages)
-
-    # Re-execute script in venv
-    python_exe = os.path.join(venv_dir, "bin", "python")
-    if not os.path.exists(python_exe):
-        python_exe = os.path.join(venv_dir, "Scripts", "python.exe")  # Windows fallback
-
-    print("Launching in virtual environment...\n")
-    os.execv(python_exe, [python_exe, __file__] + sys.argv[1:])
+    def _missing(mod):
+        try:
+            return importlib.util.find_spec(mod) is None
+        except (ModuleNotFoundError, ValueError):
+            return True
+    missing = [spec for mod, spec in REQUIRED_DEPS if _missing(mod)]
+    if missing:
+        pip_exe = _venv_bin(venv_dir, "pip")
+        print(f"Installing missing dependencies: {', '.join(missing)}")
+        subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120", *missing])
 
 setup_venv()
-
-def check_deps():
-    missing = []
-    try: import grpc
-    except ImportError: missing.append("grpcio")
-    try: from google.protobuf import descriptor_pool
-    except ImportError: missing.append("protobuf")
-    try: from grpc_reflection.v1alpha import reflection_pb2
-    except ImportError: missing.append("grpcio-reflection")
-    if missing:
-        print(f"\n  \033[91mMissing: {', '.join(missing)}\033[0m")
-        print(f"  \033[1mInstall:\033[0m pip install grpcio grpcio-reflection protobuf --break-system-packages\n")
-        sys.exit(1)
-
-check_deps()
 
 import grpc
 from google.protobuf import descriptor_pb2, descriptor_pool as dp, json_format, message_factory

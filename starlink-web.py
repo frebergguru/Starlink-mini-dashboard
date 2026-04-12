@@ -18,25 +18,43 @@ STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 MINI_PATH = os.path.join(SCRIPT_DIR, "starlink-mini.py")
 
 
+REQUIRED_DEPS = [
+    ("grpc", "grpcio>=1.62.0"),
+    ("grpc_reflection", "grpcio-reflection>=1.62.0"),
+    ("google.protobuf", "protobuf>=4.25.0"),
+    ("segno", "segno>=1.5.0"),
+    ("cryptography", "cryptography>=42.0.0"),
+]
+
+
+def _venv_bin(venv_dir, name):
+    exe = os.path.join(venv_dir, "bin", name)
+    if os.path.exists(exe):
+        return exe
+    return os.path.join(venv_dir, "Scripts", f"{name}.exe")
+
+
 def setup_venv():
     venv_dir = os.path.join(SCRIPT_DIR, "venv")
-    in_venv = hasattr(sys, "real_prefix") or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
-    if in_venv:
-        return
-    if not os.path.exists(venv_dir):
-        print(f"Creating virtual environment in {venv_dir}...")
-        venv.create(venv_dir, with_pip=True)
-    pip_exe = os.path.join(venv_dir, "bin", "pip")
-    if not os.path.exists(pip_exe):
-        pip_exe = os.path.join(venv_dir, "Scripts", "pip.exe")
-    print("Ensuring dependencies...")
-    subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120",
-                           "grpcio>=1.62.0", "grpcio-reflection>=1.62.0", "protobuf>=4.25.0",
-                           "segno>=1.5.0", "cryptography>=42.0.0"])
-    python_exe = os.path.join(venv_dir, "bin", "python")
-    if not os.path.exists(python_exe):
-        python_exe = os.path.join(venv_dir, "Scripts", "python.exe")
-    os.execv(python_exe, [python_exe, __file__] + sys.argv[1:])
+    venv_python = _venv_bin(venv_dir, "python")
+
+    if os.path.abspath(sys.executable) != os.path.abspath(venv_python):
+        if not os.path.exists(venv_dir):
+            print(f"Creating virtual environment in {venv_dir}...")
+            venv.create(venv_dir, with_pip=True)
+        venv_python = _venv_bin(venv_dir, "python")
+        os.execv(venv_python, [venv_python, __file__] + sys.argv[1:])
+
+    def _missing(mod):
+        try:
+            return importlib.util.find_spec(mod) is None
+        except (ModuleNotFoundError, ValueError):
+            return True
+    missing = [spec for mod, spec in REQUIRED_DEPS if _missing(mod)]
+    if missing:
+        pip_exe = _venv_bin(venv_dir, "pip")
+        print(f"Installing missing dependencies: {', '.join(missing)}")
+        subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120", *missing])
 
 
 setup_venv()
