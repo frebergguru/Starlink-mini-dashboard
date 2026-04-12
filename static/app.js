@@ -506,6 +506,15 @@
     return String(b).replace(/^RF_/, "").replace("2GHZ", "2.4 GHz").replace("5GHZ_HIGH", "5 GHz (high)").replace("5GHZ", "5 GHz");
   };
 
+  const fmtDhcpRange = (ipv4, start, end) => {
+    const s = Number(start);
+    const e = Number(end);
+    if (!isFinite(s) || !isFinite(e)) return null;
+    const m = String(ipv4 || "").match(/^(\d+\.\d+\.\d+)\.\d+(?:\/\d+)?$/);
+    if (!m) return `${s}–${e}`;
+    return `${m[1]}.${s} – ${m[1]}.${e}`;
+  };
+
   const renderRouterStatus = (data) => {
     const s = unwrap(data, "wifi_get_status", "get_status") || {};
     const di = s.device_info || {};
@@ -866,6 +875,12 @@
       if (net.ipv4) lines.push(`${net.ipv4}`);
       if (net.domain) lines.push(i18n.t("wifi.domain", { v: net.domain }));
       if (net.vlan) lines.push(i18n.t("wifi.vlan", { v: net.vlan }));
+      if (net.dhcp_disabled) {
+        lines.push(i18n.t("wifi.dhcp_off"));
+      } else {
+        const range = fmtDhcpRange(net.ipv4, net.dhcpv4_start, net.dhcpv4_end);
+        if (range) lines.push(i18n.t("wifi.dhcp_range", { v: range }));
+      }
       if (net.dhcpv4_lease_duration_s) lines.push(i18n.t("wifi.dhcp_lease", { v: net.dhcpv4_lease_duration_s }));
       if (lines.length) {
         card.appendChild(el("div", { class: "wifi-net-detail", text: lines.join(" · ") }));

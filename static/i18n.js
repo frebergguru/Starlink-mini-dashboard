@@ -5,10 +5,10 @@
   "use strict";
 
   const EN = {
-    "meta.title": "Starlink Mini · Control Center",
+    "meta.title": "Starlink Mini · Dashboard",
 
     "brand.title": "Starlink Mini",
-    "brand.sub": "Control Center",
+    "brand.sub": "Dashboard",
     "conn.dish": "Starlink dish",
     "conn.router": "Starlink router",
     "conn.dish_label": "Dish",
@@ -246,6 +246,8 @@
     "wifi.domain": "domain {v}",
     "wifi.vlan": "VLAN {v}",
     "wifi.dhcp_lease": "DHCP lease {v}s",
+    "wifi.dhcp_range": "DHCP {v}",
+    "wifi.dhcp_off": "DHCP off",
     "wifi.networks_one": "{count} network",
     "wifi.networks_other": "{count} networks",
     "wifi.password_label": "Password",
@@ -357,10 +359,10 @@
   };
 
   const NB = {
-    "meta.title": "Starlink Mini · Kontrollsenter",
+    "meta.title": "Starlink Mini · Dashbord",
 
     "brand.title": "Starlink Mini",
-    "brand.sub": "Kontrollsenter",
+    "brand.sub": "Dashbord",
     "conn.dish": "Starlink-antenne",
     "conn.router": "Starlink-ruter",
     "conn.dish_label": "Antenne",
@@ -598,6 +600,8 @@
     "wifi.domain": "domene {v}",
     "wifi.vlan": "VLAN {v}",
     "wifi.dhcp_lease": "DHCP-lån {v}s",
+    "wifi.dhcp_range": "DHCP {v}",
+    "wifi.dhcp_off": "DHCP av",
     "wifi.networks_one": "{count} nettverk",
     "wifi.networks_other": "{count} nettverk",
     "wifi.password_label": "Passord",

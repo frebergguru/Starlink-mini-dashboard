@@ -1,7 +1,7 @@
-# Starlink Mini · Control Center
+# Starlink Mini · Dashboard
 
 A browser dashboard for Starlink Mini dishes. Connects to the dish and
-Starlink router over the local gRPC API and serves a live control center
+Starlink router over the local gRPC API and serves a live dashboard
 at `http://127.0.0.1:8800`.
 
 ## Quick start
