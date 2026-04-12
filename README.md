@@ -15,10 +15,12 @@ Then open <http://127.0.0.1:8800> in a browser.
 
 The script automatically:
 
-1. Creates a Python virtual environment in `./venv`
-2. Installs dependencies (`grpcio`, `grpcio-reflection`, `protobuf`,
-   `segno`, `cryptography`)
-3. Re-executes inside the venv
+1. Creates a Python virtual environment in `./venv` if one doesn't
+   already exist
+2. Re-executes inside the venv
+3. Installs any missing dependencies (`grpcio`, `grpcio-reflection`,
+   `protobuf`, `segno`, `cryptography`) — existing installs are left
+   alone
 
 ## CLI flags
 
@@ -43,8 +45,8 @@ Live dish state, refreshed on a timer (toggle with **Live refresh**):
   rate, SNR, uptime
 - **Dish Status** — alerts, pointing, obstruction fraction, heating,
   ready states
-- **GPS & Location** — coordinates, altitude, speed, accuracy, direct
-  link to Google Maps
+- **GPS & Location** — coordinates, altitude, speed, accuracy, and
+  one-click links to Google Maps or OpenStreetMap
 - **Alignment** — sky view SVG showing current boresight vs. desired
   target plus the alignment filter state (CONVERGED, INITIALIZING…)
 - **Signal & Ready States** — SCP / L1L2 / XPHY / AAP / RF
@@ -211,6 +213,13 @@ static/i18n.js            en / nb translations
 - **Read-mostly** — write paths (reboot, raw gRPC) exist but the dish
   rejects most config writes
 - **Stateless server** — the only persistent state is the Wi-Fi vault
+
+## Acknowledgments
+
+This project was co-created with
+[Claude](https://www.anthropic.com/claude) (Anthropic's Claude Code
+CLI). Pair-programming contributions span the gRPC proxy, the web
+dashboard, the Wi-Fi vault, and the venv bootstrap.
 
 ---
 
