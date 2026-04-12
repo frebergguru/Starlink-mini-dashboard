@@ -26,14 +26,27 @@ The script automatically:
 
 ```
 ./starlink-web.py --host 0.0.0.0 --port 8800
+./starlink-web.py -b                    # detach and keep running
+./starlink-web.py --stop                # stop a detached instance
 ```
 
 - `--host` — bind address (default `127.0.0.1`)
 - `--port` — TCP port (default `8800`)
+- `-b` / `--background` — detach from the terminal and keep serving.
+  Prints the child PID, then exits. Child stdout/stderr are appended
+  to `--log`.
+- `--log` — log file for background mode (default `./starlink-web.log`)
+- `--pidfile` — PID file path (default `./starlink-web.pid`)
+- `--stop` — send `SIGTERM` to the PID recorded in `--pidfile`, wait
+  up to 5 s, then `SIGKILL` if necessary, and remove the pidfile
 
 Use `--host 0.0.0.0` to expose the dashboard to other machines on your
 LAN. There is no auth on the HTTP endpoint — only do this on trusted
 networks.
+
+Background mode is POSIX-only (Linux / macOS). Starting `-b` while an
+instance is already recorded in the pidfile is refused; use `--stop`
+first.
 
 ## Tabs
 

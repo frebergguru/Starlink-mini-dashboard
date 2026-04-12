@@ -4,12 +4,14 @@ STARLINK MINI · WEB UI
 Serves a browser dashboard that proxies the dish's gRPC API.
 
 Run:
-  ./starlink-web.py          # http://127.0.0.1:8800
+  ./starlink-web.py                          # http://127.0.0.1:8800
   ./starlink-web.py --host 0.0.0.0 --port 8800
+  ./starlink-web.py -b                       # detach, log to ./starlink-web.log
+  ./starlink-web.py --stop                   # kill the detached instance
 """
 
 import os, sys, json, io, contextlib, argparse, importlib.util, subprocess, venv, shutil, threading, mimetypes
-import base64, hashlib, hmac, datetime, time
+import base64, hashlib, hmac, datetime, time, signal, errno
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -901,11 +903,124 @@ class Handler(BaseHTTPRequestHandler):
         _json_response(self, code, payload)
 
 
+DEFAULT_PIDFILE = os.path.join(SCRIPT_DIR, "starlink-web.pid")
+DEFAULT_LOGFILE = os.path.join(SCRIPT_DIR, "starlink-web.log")
+
+
+def _read_pidfile(path):
+    try:
+        with open(path, "r") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _pid_alive(pid):
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _spawn_background(argv_without_flag, logfile, pidfile):
+    if os.name != "posix":
+        print("  --background is only supported on POSIX systems.")
+        sys.exit(2)
+
+    existing = _read_pidfile(pidfile)
+    if _pid_alive(existing):
+        print(f"  starlink-web already running (pid {existing}, pidfile {pidfile}).")
+        print(f"  Use --stop to terminate it first.")
+        sys.exit(1)
+    if existing is not None:
+        try: os.remove(pidfile)
+        except OSError: pass
+
+    log_fd = os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    devnull_fd = os.open(os.devnull, os.O_RDONLY)
+    child_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    try:
+        child = subprocess.Popen(
+            [sys.executable, "-u", __file__, *argv_without_flag],
+            stdin=devnull_fd,
+            stdout=log_fd,
+            stderr=log_fd,
+            start_new_session=True,
+            close_fds=True,
+            cwd=SCRIPT_DIR,
+            env=child_env,
+        )
+    finally:
+        os.close(log_fd)
+        os.close(devnull_fd)
+
+    with open(pidfile, "w") as f:
+        f.write(f"{child.pid}\n")
+    os.chmod(pidfile, 0o644)
+
+    print(f"  starlink-web started in background")
+    print(f"    pid      {child.pid}")
+    print(f"    log      {logfile}")
+    print(f"    pidfile  {pidfile}")
+    print(f"    stop     ./starlink-web.py --stop   (or: kill {child.pid})")
+
+
+def _stop_background(pidfile):
+    pid = _read_pidfile(pidfile)
+    if pid is None:
+        print(f"  No pidfile at {pidfile} — nothing to stop.")
+        sys.exit(1)
+    if not _pid_alive(pid):
+        print(f"  pid {pid} is not running; removing stale pidfile.")
+        try: os.remove(pidfile)
+        except OSError: pass
+        sys.exit(0)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        print(f"  Failed to signal pid {pid}: {e}")
+        sys.exit(1)
+    for _ in range(50):  # up to ~5 s
+        time.sleep(0.1)
+        if not _pid_alive(pid):
+            break
+    else:
+        print(f"  pid {pid} didn't exit after SIGTERM; sending SIGKILL.")
+        try: os.kill(pid, signal.SIGKILL)
+        except OSError: pass
+    try: os.remove(pidfile)
+    except OSError: pass
+    print(f"  starlink-web stopped (pid {pid}).")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8800)
+    ap.add_argument("-b", "--background", action="store_true",
+                    help="detach and run in the background; logs to --log")
+    ap.add_argument("--log", default=DEFAULT_LOGFILE,
+                    help=f"log file for --background (default: {DEFAULT_LOGFILE})")
+    ap.add_argument("--pidfile", default=DEFAULT_PIDFILE,
+                    help=f"pid file for --background / --stop (default: {DEFAULT_PIDFILE})")
+    ap.add_argument("--stop", action="store_true",
+                    help="stop a detached instance recorded in --pidfile and exit")
     args = ap.parse_args()
+
+    if args.stop:
+        _stop_background(args.pidfile)
+        return
+
+    if args.background:
+        forwarded = ["--host", args.host, "--port", str(args.port),
+                     "--log", args.log, "--pidfile", args.pidfile]
+        _spawn_background(forwarded, args.log, args.pidfile)
+        return
 
     print(f"  Connecting to dish at {DISH_ADDR} ...")
     ok, msg = DISH_PROXY.connect()

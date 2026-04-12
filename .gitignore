@@ -4,3 +4,5 @@ __pycache__/
 .claude/
 .starlink-vault.json
 .starlink-vault.json.tmp
+starlink-web.pid
+starlink-web.log
