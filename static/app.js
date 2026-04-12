@@ -250,7 +250,22 @@
     const ul = pick(s, "uplink_throughput_bps", "uplinkThroughputBps") || 0;
     const lat = pick(s, "pop_ping_latency_ms", "popPingLatencyMs");
     const drop = pick(s, "pop_ping_drop_rate", "popPingDropRate");
-    const snr = pick(s, "is_snr_above_noise_floor", "snr_above_noise_floor", "snrAboveNoiseFloor");
+    const snrRaw = pick(s, "is_snr_above_noise_floor", "snr_above_noise_floor", "snrAboveNoiseFloor");
+    const snrNumField = pick(s, "snr", "snr_db", "snrDb");
+    let snrBool = null;
+    let snrNum = null;
+    if (typeof snrRaw === "boolean") snrBool = snrRaw;
+    else if (snrRaw != null && isFinite(Number(snrRaw))) snrNum = Number(snrRaw);
+    if (snrNum == null && snrNumField != null && isFinite(Number(snrNumField))) {
+      snrNum = Number(snrNumField);
+    }
+    const snrTag = snrBool == null ? null : (snrBool ? i18n.t("snr.above_floor") : i18n.t("snr.below_floor"));
+    const snrDisplay =
+      snrNum != null && snrTag ? `${fmtSnr(snrNum)} · ${snrTag}`
+      : snrNum != null ? fmtSnr(snrNum)
+      : snrTag ? snrTag
+      : "—";
+
     const devState = pick(s, "device_state", "deviceState") || {};
     const up = pick(devState, "uptime_s", "uptimeS");
 
@@ -264,7 +279,7 @@
 
     $("#m-lat").textContent = fmtMs(lat);
     $("#m-drop").textContent = fmtPct(drop);
-    $("#m-snr").textContent = typeof snr === "boolean" ? (snr ? i18n.t("snr.above_floor") : i18n.t("snr.below_floor")) : fmtSnr(snr);
+    $("#m-snr").textContent = snrDisplay;
     $("#m-uptime").textContent = fmtUptime(up);
 
     // Status pill
@@ -304,9 +319,9 @@
 
     // Signal & ready states
     const rs = pick(s, "ready_states", "readyStates") || {};
+    const signalClass = snrBool == null ? null : (snrBool ? "good" : "warn");
     const signalEntries = [
-      [i18n.t("kv.snr_above_floor"), typeof snr === "boolean" ? (snr ? i18n.t("bool.yes") : i18n.t("bool.no")) : fmtSnr(snr),
-        typeof snr === "boolean" ? (snr ? "good" : "warn") : null],
+      [i18n.t("kv.snr"), snrDisplay === "—" ? null : snrDisplay, signalClass],
       [i18n.t("kv.class_of_service"), classOfService],
       [i18n.t("kv.software_update"), updateState],
     ];
