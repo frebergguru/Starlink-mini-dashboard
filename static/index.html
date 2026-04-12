@@ -424,6 +424,19 @@
     </form>
   </dialog>
 
+  <!-- QR code modal -->
+  <dialog id="qr-modal" class="modal qr-modal">
+    <form method="dialog" class="modal-body qr-modal-body">
+      <h3 id="qr-title" data-i18n="wifi.qr_title">Scan to connect</h3>
+      <div id="qr-ssid" class="qr-ssid"></div>
+      <div id="qr-canvas" class="qr-canvas"></div>
+      <p class="muted small qr-hint" data-i18n="wifi.qr_hint">Point your phone camera at the code and tap the notification to join.</p>
+      <div class="modal-actions">
+        <button value="close" class="btn btn-primary" data-i18n="modal.cancel">Close</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Toast container -->
   <div id="toasts" class="toasts" aria-live="polite" aria-atomic="true"></div>
 

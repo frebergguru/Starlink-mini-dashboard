@@ -822,6 +822,97 @@ main {
   font-weight: 500;
 }
 
+.wifi-net-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.wifi-net-actions .btn {
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.wifi-net-pass {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(92, 117, 150, 0.10);
+  border: 1px solid rgba(138, 160, 191, 0.22);
+  border-radius: 8px;
+}
+
+.wifi-net-pass[data-visible="true"] {
+  display: flex;
+}
+
+.wifi-net-pass-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.wifi-net-pass-value {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+  user-select: all;
+}
+
+.wifi-net-pass .btn {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+
+/* Wi-Fi QR code modal */
+
+.qr-modal::backdrop {
+  background: rgba(3, 6, 11, 0.75);
+  backdrop-filter: blur(3px);
+}
+
+.qr-modal-body {
+  max-width: 340px;
+  text-align: center;
+}
+
+.qr-ssid {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 4px 0 14px;
+  word-break: break-all;
+}
+
+.qr-canvas {
+  display: flex;
+  justify-content: center;
+  padding: 14px;
+  background: #ffffff;
+  border-radius: 10px;
+  margin: 0 auto;
+  min-height: 240px;
+}
+
+.qr-canvas svg {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+}
+
+.qr-hint {
+  margin-top: 14px;
+  line-height: 1.5;
+}
+
 /* Radio stats */
 
 .radio-list {

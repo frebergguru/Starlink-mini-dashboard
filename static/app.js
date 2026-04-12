@@ -11,6 +11,8 @@
 
   let utcOffsetS = 0;
   let lastDiagnostics = null;
+  let wifiSecretsCache = null;
+  let wifiSecretsPromise = null;
 
   // ───── Utilities ─────
 
@@ -617,6 +619,114 @@
     }
   };
 
+  const fetchWifiSecrets = async () => {
+    if (wifiSecretsCache) return wifiSecretsCache;
+    if (wifiSecretsPromise) return wifiSecretsPromise;
+    wifiSecretsPromise = (async () => {
+      const r = await api.get("/api/router/wifi_secrets");
+      if (!r.ok) {
+        wifiSecretsPromise = null;
+        toast("error", i18n.t("wifi.secrets_failed"), r.body.error || "");
+        return null;
+      }
+      const map = {};
+      for (const net of r.body.networks || []) {
+        if (net && net.ssid) map[net.ssid] = net;
+      }
+      wifiSecretsCache = map;
+      wifiSecretsPromise = null;
+      return map;
+    })();
+    return wifiSecretsPromise;
+  };
+
+  const openWifiQr = async (ssid) => {
+    const modal = $("#qr-modal");
+    const canvas = $("#qr-canvas");
+    const ssidEl = $("#qr-ssid");
+    ssidEl.textContent = ssid;
+    canvas.replaceChildren();
+    canvas.appendChild(el("div", { class: "muted small", text: "…" }));
+    modal.showModal();
+    try {
+      const resp = await fetch(`/api/router/wifi_qr?ssid=${encodeURIComponent(ssid)}`, {
+        headers: { Accept: "image/svg+xml" },
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+      const svgText = await resp.text();
+      canvas.replaceChildren();
+      canvas.insertAdjacentHTML("beforeend", svgText);
+    } catch (err) {
+      canvas.replaceChildren();
+      canvas.appendChild(el("div", { class: "muted small", text: err.message || String(err) }));
+      toast("error", i18n.t("wifi.qr_failed"), err.message || "");
+    }
+  };
+
+  const buildWifiActions = (card, ssid) => {
+    const passRow = el("div", { class: "wifi-net-pass", "data-visible": "false" }, [
+      el("span", { class: "wifi-net-pass-label", text: i18n.t("wifi.password_label") }),
+      el("code", { class: "wifi-net-pass-value", text: "" }),
+      el("button", { type: "button", class: "btn btn-ghost wifi-net-pass-copy", text: i18n.t("wifi.copy_password") }),
+    ]);
+
+    const showBtn = el("button", {
+      type: "button",
+      class: "btn btn-ghost",
+      text: i18n.t("wifi.show_password"),
+    });
+    const qrBtn = el("button", {
+      type: "button",
+      class: "btn btn-ghost",
+      text: i18n.t("wifi.show_qr"),
+    });
+
+    showBtn.addEventListener("click", async () => {
+      const visible = passRow.dataset.visible === "true";
+      if (visible) {
+        passRow.dataset.visible = "false";
+        showBtn.textContent = i18n.t("wifi.show_password");
+        return;
+      }
+      const secrets = await fetchWifiSecrets();
+      if (!secrets) return;
+      const entry = secrets[ssid];
+      const value = passRow.querySelector(".wifi-net-pass-value");
+      if (!entry || !entry.psk) {
+        value.textContent = i18n.t("wifi.no_password");
+      } else {
+        value.textContent = entry.psk;
+      }
+      passRow.dataset.visible = "true";
+      showBtn.textContent = i18n.t("wifi.hide_password");
+    });
+
+    qrBtn.addEventListener("click", async () => {
+      const secrets = await fetchWifiSecrets();
+      if (!secrets || !secrets[ssid]) {
+        toast("error", i18n.t("wifi.qr_failed"), i18n.t("wifi.no_password"));
+        return;
+      }
+      openWifiQr(ssid);
+    });
+
+    passRow.querySelector(".wifi-net-pass-copy").addEventListener("click", async (e) => {
+      e.preventDefault();
+      const value = passRow.querySelector(".wifi-net-pass-value").textContent || "";
+      try {
+        await navigator.clipboard.writeText(value);
+        toast("success", i18n.t("wifi.copied"));
+      } catch {}
+    });
+
+    const actions = el("div", { class: "wifi-net-actions" }, [showBtn, qrBtn]);
+    card.appendChild(actions);
+    card.appendChild(passRow);
+  };
+
   const renderRouterConfig = (data) => {
     const wifi = pick(
       unwrap(data, "wifi_get_config", "wifiGetConfig") || {},
@@ -660,7 +770,11 @@
       if (net.domain) lines.push(i18n.t("wifi.domain", { v: net.domain }));
       if (net.vlan) lines.push(i18n.t("wifi.vlan", { v: net.vlan }));
       if (net.dhcpv4_lease_duration_s) lines.push(i18n.t("wifi.dhcp_lease", { v: net.dhcpv4_lease_duration_s }));
-      card.appendChild(el("div", { class: "wifi-net-detail", text: lines.join(" · ") }));
+      if (lines.length) {
+        card.appendChild(el("div", { class: "wifi-net-detail", text: lines.join(" · ") }));
+      }
+
+      if (bss[0] && bss[0].ssid) buildWifiActions(card, bss[0].ssid);
 
       container.appendChild(card);
     }
@@ -1750,6 +1864,7 @@
     $("#btn-router-reconnect").addEventListener("click", async () => {
       const dot = $("#router-conn-dot");
       if (dot) dot.dataset.state = "unknown";
+      wifiSecretsCache = null;
       const r = await api.post("/api/router/reconnect", {});
       if (r.ok && r.body.connected) {
         toast("success", i18n.t("toast.router_reconnected"));
