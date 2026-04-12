@@ -13,6 +13,8 @@
   let lastDiagnostics = null;
   let wifiSecretsCache = null;
   let wifiSecretsPromise = null;
+  let vaultSavedSet = null;      // Set<ssid> of vault entries, null = not loaded
+  let vaultSavedPromise = null;
 
   // ───── Utilities ─────
 
@@ -643,32 +645,43 @@
     return wifiSecretsPromise;
   };
 
-  const wifiStorageKey = (ssid) => `starlink.wifi.${ssid}`;
-
-  const getStoredPassword = (ssid) => {
-    try { return localStorage.getItem(wifiStorageKey(ssid)); }
-    catch { return null; }
+  const loadVaultSsids = async (force) => {
+    if (!force && vaultSavedSet) return vaultSavedSet;
+    if (vaultSavedPromise) return vaultSavedPromise;
+    vaultSavedPromise = (async () => {
+      const r = await api.get("/api/vault/list");
+      vaultSavedPromise = null;
+      if (!r.ok) return new Set();
+      vaultSavedSet = new Set(r.body.ssids || []);
+      return vaultSavedSet;
+    })();
+    return vaultSavedPromise;
   };
 
-  const setStoredPassword = (ssid, psk) => {
-    try { localStorage.setItem(wifiStorageKey(ssid), psk); } catch {}
+  const vaultHasSsid = (ssid) => Boolean(vaultSavedSet && vaultSavedSet.has(ssid));
+
+  const vaultGetPassword = async (ssid) => {
+    const r = await api.post("/api/vault/get", { ssid });
+    if (!r.ok) return null;
+    return r.body.psk || null;
   };
 
-  const clearStoredPassword = (ssid) => {
-    try { localStorage.removeItem(wifiStorageKey(ssid)); } catch {}
-  };
-
-  const resolveWifiPassword = (ssid, secrets) => {
-    const stored = getStoredPassword(ssid);
-    if (stored) return { psk: stored, source: "local" };
-    const entry = secrets && secrets[ssid];
-    if (entry && entry.psk && !entry.masked) {
-      return { psk: entry.psk, source: "router" };
+  const vaultSetPassword = async (ssid, psk, auth) => {
+    const r = await api.post("/api/vault/set", { ssid, psk, auth: auth || "WPA" });
+    if (r.ok) {
+      if (!vaultSavedSet) vaultSavedSet = new Set();
+      vaultSavedSet.add(ssid);
     }
-    return { psk: null, source: null };
+    return r.ok;
   };
 
-  const openWifiQr = async (ssid, psk, auth) => {
+  const vaultDeletePassword = async (ssid) => {
+    const r = await api.post("/api/vault/delete", { ssid });
+    if (r.ok && vaultSavedSet) vaultSavedSet.delete(ssid);
+    return r.ok;
+  };
+
+  const openWifiQr = async (ssid) => {
     const modal = $("#qr-modal");
     const canvas = $("#qr-canvas");
     const ssidEl = $("#qr-ssid");
@@ -682,7 +695,7 @@
           "Content-Type": "application/json",
           Accept: "image/svg+xml",
         },
-        body: JSON.stringify({ ssid, psk, auth: auth || "WPA" }),
+        body: JSON.stringify({ ssid }),
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
@@ -728,7 +741,11 @@
     const showBtn = el("button", { type: "button", class: "btn btn-ghost", text: i18n.t("wifi.show_password") });
     const qrBtn = el("button", { type: "button", class: "btn btn-ghost", text: i18n.t("wifi.show_qr") });
     const forgetBtn = el("button", { type: "button", class: "btn btn-ghost wifi-net-forget", text: i18n.t("wifi.forget") });
-    forgetBtn.style.display = getStoredPassword(ssid) ? "" : "none";
+
+    const syncForgetVisibility = () => {
+      forgetBtn.style.display = vaultHasSsid(ssid) ? "" : "none";
+    };
+    syncForgetVisibility();
 
     const closePanels = () => {
       passRow.dataset.visible = "false";
@@ -756,18 +773,23 @@
         closePanels();
         return;
       }
-      const secrets = await fetchWifiSecrets();
-      const resolved = resolveWifiPassword(ssid, secrets);
-      if (resolved.psk) revealExistingPassword(resolved.psk);
-      else promptForPassword();
+      if (vaultHasSsid(ssid)) {
+        const psk = await vaultGetPassword(ssid);
+        if (psk) { revealExistingPassword(psk); return; }
+      }
+      promptForPassword();
     });
 
-    saveBtn.addEventListener("click", (e) => {
+    saveBtn.addEventListener("click", async (e) => {
       e.preventDefault();
       const value = (entryInput.value || "").trim();
       if (!value) return;
-      setStoredPassword(ssid, value);
-      forgetBtn.style.display = "";
+      const ok = await vaultSetPassword(ssid, value, "WPA");
+      if (!ok) {
+        toast("error", i18n.t("wifi.secrets_failed"));
+        return;
+      }
+      syncForgetVisibility();
       toast("success", i18n.t("wifi.saved"));
       revealExistingPassword(value);
     });
@@ -777,23 +799,21 @@
       saveBtn.click();
     });
 
-    forgetBtn.addEventListener("click", () => {
-      clearStoredPassword(ssid);
-      forgetBtn.style.display = "none";
+    forgetBtn.addEventListener("click", async () => {
+      const ok = await vaultDeletePassword(ssid);
+      if (!ok) return;
+      syncForgetVisibility();
       toast("success", i18n.t("wifi.forgotten"));
       closePanels();
     });
 
     qrBtn.addEventListener("click", async () => {
-      const secrets = await fetchWifiSecrets();
-      const resolved = resolveWifiPassword(ssid, secrets);
-      if (!resolved.psk) {
+      if (!vaultHasSsid(ssid)) {
         toast("error", i18n.t("wifi.qr_failed"), i18n.t("wifi.need_password"));
         promptForPassword();
         return;
       }
-      const entry = secrets && secrets[ssid];
-      openWifiQr(ssid, resolved.psk, entry && entry.auth);
+      openWifiQr(ssid);
     });
 
     copyBtn.addEventListener("click", async (e) => {
@@ -1972,6 +1992,154 @@
 
   // ───── Boot ─────
 
+  // ───── Vault gate (master password) ─────
+
+  const vaultModal = () => $("#vault-modal");
+  const vaultForm = () => $("#vault-form");
+
+  const setVaultMode = (mode) => {
+    // mode: "setup" or "unlock"
+    const titleEl = $("#vault-title");
+    const descEl = $("#vault-desc");
+    const submit = $("#vault-submit");
+    const confirmField = $("#vault-confirm-field");
+    const resetLink = $("#vault-reset-link");
+    const errEl = $("#vault-error");
+    errEl.classList.add("hidden");
+    errEl.textContent = "";
+    $("#vault-password").value = "";
+    $("#vault-confirm").value = "";
+    if (mode === "setup") {
+      titleEl.textContent = i18n.t("vault.setup_title");
+      descEl.textContent = i18n.t("vault.setup_desc");
+      submit.textContent = i18n.t("vault.setup_btn");
+      confirmField.classList.remove("hidden");
+      resetLink.classList.add("hidden");
+    } else {
+      titleEl.textContent = i18n.t("vault.unlock_title");
+      descEl.textContent = i18n.t("vault.unlock_desc");
+      submit.textContent = i18n.t("vault.unlock_btn");
+      confirmField.classList.add("hidden");
+      resetLink.classList.remove("hidden");
+    }
+  };
+
+  const showVaultError = (msg) => {
+    const e = $("#vault-error");
+    e.textContent = msg;
+    e.classList.remove("hidden");
+  };
+
+  const vaultGate = async () => {
+    const statusR = await api.get("/api/vault/status");
+    if (!statusR.ok) {
+      // Server unreachable — retry loop?
+      return new Promise((resolve) => setTimeout(() => vaultGate().then(resolve), 2000));
+    }
+    if (statusR.body.unlocked) {
+      $("#btn-lock-vault").classList.remove("hidden");
+      return true;
+    }
+    const modal = vaultModal();
+    const form = vaultForm();
+    document.body.inert = true;
+    modal.showModal();
+
+    let mode = statusR.body.initialized ? "unlock" : "setup";
+    setVaultMode(mode);
+    setTimeout(() => $("#vault-password").focus(), 50);
+
+    return new Promise((resolve) => {
+      const onSubmit = async (e) => {
+        e.preventDefault();
+        const password = $("#vault-password").value || "";
+        if (mode === "setup") {
+          if (password.length < 8) { showVaultError(i18n.t("vault.min_length")); return; }
+          if (password !== ($("#vault-confirm").value || "")) {
+            showVaultError(i18n.t("vault.mismatch")); return;
+          }
+          const r = await api.post("/api/vault/init", { password });
+          if (!r.ok) {
+            showVaultError(r.body.error || i18n.t("vault.init_failed"));
+            return;
+          }
+          closeGate();
+          return;
+        }
+        // unlock
+        const r = await api.post("/api/vault/unlock", { password });
+        if (!r.ok) {
+          showVaultError(i18n.t("vault.wrong"));
+          $("#vault-password").select();
+          return;
+        }
+        closeGate();
+      };
+
+      const onReset = async () => {
+        const ok = await confirmAction(
+          i18n.t("vault.reset_title"),
+          i18n.t("vault.reset_msg"),
+          i18n.t("vault.reset_ok")
+        );
+        if (!ok) return;
+        const r = await api.post("/api/vault/reset", {});
+        if (!r.ok) {
+          showVaultError(r.body.error || i18n.t("vault.init_failed"));
+          return;
+        }
+        mode = "setup";
+        setVaultMode(mode);
+        toast("success", i18n.t("vault.reset_done"));
+        setTimeout(() => $("#vault-password").focus(), 50);
+      };
+
+      const closeGate = () => {
+        form.removeEventListener("submit", onSubmit);
+        $("#vault-reset-link").removeEventListener("click", onReset);
+        modal.close();
+        document.body.inert = false;
+        $("#btn-lock-vault").classList.remove("hidden");
+        resolve(true);
+      };
+
+      form.addEventListener("submit", onSubmit);
+      $("#vault-reset-link").addEventListener("click", onReset);
+    });
+  };
+
+  const migrateLegacyWifi = async () => {
+    let keys = [];
+    try {
+      keys = Object.keys(localStorage).filter((k) => k.startsWith("starlink.wifi."));
+    } catch { return; }
+    if (!keys.length) return;
+    let migrated = 0;
+    for (const k of keys) {
+      const ssid = k.slice("starlink.wifi.".length);
+      const psk = localStorage.getItem(k);
+      if (!psk) { localStorage.removeItem(k); continue; }
+      const ok = await vaultSetPassword(ssid, psk, "WPA");
+      if (ok) {
+        localStorage.removeItem(k);
+        migrated++;
+      }
+    }
+    if (migrated) {
+      toast("success", i18n.tp("vault.migrated", migrated));
+    }
+  };
+
+  const initLockButton = () => {
+    const btn = $("#btn-lock-vault");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      await api.post("/api/vault/lock", {});
+      toast("success", i18n.t("vault.locked_toast"));
+      setTimeout(() => location.reload(), 300);
+    });
+  };
+
   const initLangSwitcher = () => {
     const sel = $("#lang-select");
     if (!sel) return;
@@ -1993,12 +2161,17 @@
   let currentState = null;
 
   document.addEventListener("DOMContentLoaded", async () => {
+    await vaultGate();
     initTabs();
     initHeader();
     initConfig();
     initActions();
     initAdvanced();
     initLangSwitcher();
+    initLockButton();
+
+    // Populate the vault SSID cache once; fire migration in the background.
+    loadVaultSsids(true).then(() => migrateLegacyWifi());
 
     const state = await refreshState();
     currentState = state;

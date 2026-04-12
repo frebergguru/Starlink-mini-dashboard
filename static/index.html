@@ -33,6 +33,7 @@
         <option value="en" data-i18n="lang.en">🇬🇧</option>
         <option value="nb" data-i18n="lang.nb">🇳🇴</option>
       </select>
+      <button id="btn-lock-vault" type="button" class="btn btn-ghost btn-lock hidden" data-i18n-attr="title:vault.lock_title;aria-label:vault.lock_title" title="Lock vault" aria-label="Lock vault">🔒</button>
     </div>
   </header>
 
@@ -420,6 +421,27 @@
       <div class="modal-actions">
         <button value="cancel" class="btn btn-ghost" data-i18n="modal.cancel">Cancel</button>
         <button id="confirm-ok" value="ok" class="btn btn-danger" data-i18n="modal.confirm">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Master password vault gate -->
+  <dialog id="vault-modal" class="modal vault-modal">
+    <form id="vault-form" class="modal-body vault-modal-body">
+      <h3 id="vault-title" data-i18n="vault.unlock_title">Enter master password</h3>
+      <p id="vault-desc" class="muted small" data-i18n="vault.unlock_desc">Unlock the Wi-Fi password vault to continue.</p>
+      <label class="field vault-field">
+        <span data-i18n="vault.password">Master password</span>
+        <input id="vault-password" type="password" autocomplete="current-password" required>
+      </label>
+      <label class="field vault-field hidden" id="vault-confirm-field">
+        <span data-i18n="vault.confirm">Confirm password</span>
+        <input id="vault-confirm" type="password" autocomplete="new-password">
+      </label>
+      <p id="vault-error" class="vault-error hidden"></p>
+      <div class="modal-actions vault-actions">
+        <button id="vault-reset-link" type="button" class="btn btn-ghost btn-link" data-i18n="vault.reset_link">Forgot it? Reset vault</button>
+        <button id="vault-submit" type="submit" class="btn btn-primary" data-i18n="vault.unlock_btn">Unlock</button>
       </div>
     </form>
   </dialog>

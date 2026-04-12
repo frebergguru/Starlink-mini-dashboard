@@ -9,6 +9,7 @@ Run:
 """
 
 import os, sys, json, io, contextlib, argparse, importlib.util, subprocess, venv, shutil, threading, mimetypes
+import base64, hashlib, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -31,7 +32,7 @@ def setup_venv():
     print("Ensuring dependencies...")
     subprocess.check_call([pip_exe, "install", "-q", "--timeout", "120",
                            "grpcio>=1.62.0", "grpcio-reflection>=1.62.0", "protobuf>=4.25.0",
-                           "segno>=1.5.0"])
+                           "segno>=1.5.0", "cryptography>=42.0.0"])
     python_exe = os.path.join(venv_dir, "bin", "python")
     if not os.path.exists(python_exe):
         python_exe = os.path.join(venv_dir, "Scripts", "python.exe")
@@ -155,6 +156,200 @@ def _json_response(handler, code, payload):
 
 
 SENSITIVE_KEYS = {"password", "pw", "secret", "token", "credential", "client_key", "basic_service_set_psk"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Encrypted Wi-Fi password vault
+#
+# The LAN gRPC API on current firmware masks the real PSK as "•••••", so the
+# dashboard lets the user paste it once and keeps it in an AES-GCM-encrypted
+# JSON blob next to this script. The key is derived from a master password
+# via PBKDF2-SHA256 (600k iterations) and only lives in memory after unlock.
+# ─────────────────────────────────────────────────────────────────────────────
+
+VAULT_PATH = os.path.join(SCRIPT_DIR, ".starlink-vault.json")
+VAULT_CHECK_PLAINTEXT = b"starlink-mini-vault-v1"
+VAULT_KDF_ITERATIONS = 600_000
+_vault_lock = threading.Lock()
+_vault_key = None  # 32-byte AES key, set after successful unlock
+
+
+def _b64e(b):
+    return base64.b64encode(b).decode("ascii")
+
+
+def _b64d(s):
+    return base64.b64decode(s.encode("ascii"))
+
+
+def _vault_read():
+    try:
+        with open(VAULT_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _vault_write(data):
+    tmp = VAULT_PATH + ".tmp"
+    # O_CREAT|O_WRONLY|O_TRUNC with 0600 so no other user can read it mid-write.
+    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, VAULT_PATH)
+    try:
+        os.chmod(VAULT_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _derive_key(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, VAULT_KDF_ITERATIONS, dklen=32)
+
+
+def _aes_encrypt(key, plaintext):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    iv = os.urandom(12)
+    ct = AESGCM(key).encrypt(iv, plaintext, None)
+    return iv, ct
+
+
+def _aes_decrypt(key, iv, ciphertext):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+    try:
+        return AESGCM(key).decrypt(iv, ciphertext, None)
+    except InvalidTag:
+        return None
+    except Exception:
+        return None
+
+
+def _vault_verify(key, vault):
+    check = vault.get("check") or {}
+    iv = _b64d(check.get("iv_b64", ""))
+    ct = _b64d(check.get("ct_b64", ""))
+    plain = _aes_decrypt(key, iv, ct)
+    return plain == VAULT_CHECK_PLAINTEXT
+
+
+def _vault_init(password):
+    """Create a fresh vault file. Returns the derived key on success."""
+    salt = os.urandom(16)
+    key = _derive_key(password, salt)
+    iv, ct = _aes_encrypt(key, VAULT_CHECK_PLAINTEXT)
+    data = {
+        "version": 1,
+        "kdf": {
+            "alg": "pbkdf2-sha256",
+            "iterations": VAULT_KDF_ITERATIONS,
+            "salt_b64": _b64e(salt),
+        },
+        "check": {"iv_b64": _b64e(iv), "ct_b64": _b64e(ct)},
+        "entries": {},
+    }
+    _vault_write(data)
+    return key
+
+
+def _vault_unlock(password):
+    """Derive a key from the supplied password and verify it against the
+    vault file. Returns the key on success or None."""
+    vault = _vault_read()
+    if not vault:
+        return None
+    kdf = vault.get("kdf") or {}
+    salt = _b64d(kdf.get("salt_b64", ""))
+    if not salt:
+        return None
+    key = _derive_key(password, salt)
+    if not _vault_verify(key, vault):
+        return None
+    return key
+
+
+def _vault_status():
+    vault = _vault_read()
+    initialized = bool(vault and "kdf" in vault and "check" in vault)
+    with _vault_lock:
+        unlocked = _vault_key is not None
+    return {"initialized": initialized, "unlocked": unlocked}
+
+
+def _vault_list_ssids():
+    vault = _vault_read() or {}
+    return sorted(list((vault.get("entries") or {}).keys()))
+
+
+def _vault_set_entry(ssid, psk, auth):
+    global _vault_key
+    with _vault_lock:
+        if _vault_key is None:
+            return False, "locked"
+        vault = _vault_read()
+        if not vault:
+            return False, "not initialized"
+        iv, ct = _aes_encrypt(_vault_key, psk.encode("utf-8"))
+        entries = vault.setdefault("entries", {})
+        entries[ssid] = {
+            "iv_b64": _b64e(iv),
+            "ct_b64": _b64e(ct),
+            "auth": auth or "WPA",
+            "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        _vault_write(vault)
+        return True, ""
+
+
+def _vault_get_entry(ssid):
+    with _vault_lock:
+        if _vault_key is None:
+            return None, "locked"
+        vault = _vault_read() or {}
+        entry = (vault.get("entries") or {}).get(ssid)
+        if not entry:
+            return None, "not found"
+        iv = _b64d(entry.get("iv_b64", ""))
+        ct = _b64d(entry.get("ct_b64", ""))
+        plain = _aes_decrypt(_vault_key, iv, ct)
+        if plain is None:
+            return None, "decrypt failed"
+        return {"ssid": ssid, "psk": plain.decode("utf-8"), "auth": entry.get("auth") or "WPA"}, ""
+
+
+def _vault_delete_entry(ssid):
+    with _vault_lock:
+        if _vault_key is None:
+            return False, "locked"
+        vault = _vault_read() or {}
+        entries = vault.get("entries") or {}
+        if ssid in entries:
+            del entries[ssid]
+            vault["entries"] = entries
+            _vault_write(vault)
+        return True, ""
+
+
+def _vault_reset():
+    global _vault_key
+    with _vault_lock:
+        _vault_key = None
+        try:
+            os.unlink(VAULT_PATH)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return False, str(e)
+        return True, ""
 
 
 def _scrub(obj):
@@ -323,6 +518,15 @@ def _api_get(path):
             return 502, {"error": "request failed", "detail": err or "no data"}
         return 200, {"networks": _extract_wifi_secrets(data)}
 
+    if path == "/api/vault/status":
+        return 200, _vault_status()
+
+    if path == "/api/vault/list":
+        with _vault_lock:
+            if _vault_key is None:
+                return 401, {"error": "locked"}
+        return 200, {"ssids": _vault_list_ssids()}
+
     if path == "/api/services":
         if not DISH_PROXY.connected:
             return 503, {"error": "not connected"}
@@ -346,6 +550,8 @@ def _api_get(path):
 
 
 def _api_post(path, body):
+    global _vault_key
+
     if path == "/api/reconnect":
         ok, msg = DISH_PROXY.reconnect()
         return (200 if ok else 502), {"connected": ok, "message": msg}
@@ -353,6 +559,73 @@ def _api_post(path, body):
     if path == "/api/router/reconnect":
         ok, msg = ROUTER_PROXY.reconnect()
         return (200 if ok else 502), {"connected": ok, "message": msg}
+
+    if path == "/api/vault/init":
+        password = ((body or {}).get("password") or "").strip()
+        if len(password) < 8:
+            return 400, {"error": "password too short"}
+        with _vault_lock:
+            existing = _vault_read()
+            if existing and "check" in existing:
+                return 409, {"error": "already initialized"}
+            try:
+                _vault_key = _vault_init(password)
+            except Exception as e:
+                return 500, {"error": "init failed", "detail": str(e)}
+        return 200, {"unlocked": True}
+
+    if path == "/api/vault/unlock":
+        password = ((body or {}).get("password") or "")
+        key = _vault_unlock(password)
+        if key is None:
+            return 401, {"error": "wrong password"}
+        with _vault_lock:
+            _vault_key = key
+        return 200, {"unlocked": True}
+
+    if path == "/api/vault/lock":
+        with _vault_lock:
+            _vault_key = None
+        return 200, {"unlocked": False}
+
+    if path == "/api/vault/reset":
+        ok, err = _vault_reset()
+        if not ok:
+            return 500, {"error": "reset failed", "detail": err}
+        return 200, {"initialized": False, "unlocked": False}
+
+    if path == "/api/vault/set":
+        ssid = ((body or {}).get("ssid") or "").strip()
+        psk = (body or {}).get("psk") or ""
+        auth = (body or {}).get("auth") or "WPA"
+        if not ssid or not psk:
+            return 400, {"error": "ssid and psk required"}
+        ok, err = _vault_set_entry(ssid, psk, auth)
+        if not ok:
+            return (401 if err == "locked" else 500), {"error": err}
+        return 200, {"ssid": ssid}
+
+    if path == "/api/vault/get":
+        ssid = ((body or {}).get("ssid") or "").strip()
+        if not ssid:
+            return 400, {"error": "ssid required"}
+        entry, err = _vault_get_entry(ssid)
+        if entry is None:
+            if err == "locked":
+                return 401, {"error": "locked"}
+            if err == "not found":
+                return 404, {"error": "not found"}
+            return 500, {"error": err}
+        return 200, entry
+
+    if path == "/api/vault/delete":
+        ssid = ((body or {}).get("ssid") or "").strip()
+        if not ssid:
+            return 400, {"error": "ssid required"}
+        ok, err = _vault_delete_entry(ssid)
+        if not ok:
+            return (401 if err == "locked" else 500), {"error": err}
+        return 200, {"ssid": ssid}
 
     if not DISH_PROXY.connected:
         return 503, {"error": "not connected"}
@@ -408,21 +681,26 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
     def _serve_wifi_qr(self, body):
-        ssid = (body or {}).get("ssid")
-        psk = (body or {}).get("psk")
-        auth = (body or {}).get("auth") or "WPA"
+        ssid = ((body or {}).get("ssid") or "").strip()
         if not ssid:
             _json_response(self, 400, {"error": "ssid required"})
             return
-        if not psk:
-            _json_response(self, 400, {"error": "psk required"})
+        entry, err = _vault_get_entry(ssid)
+        if entry is None:
+            if err == "locked":
+                _json_response(self, 401, {"error": "locked"})
+                return
+            if err == "not found":
+                _json_response(self, 404, {"error": "not found"})
+                return
+            _json_response(self, 500, {"error": err})
             return
         try:
             import segno
         except Exception as e:
             _json_response(self, 500, {"error": f"segno unavailable: {e}"})
             return
-        uri = _wifi_uri(ssid, psk, auth, hidden=False)
+        uri = _wifi_uri(entry["ssid"], entry["psk"], entry.get("auth") or "WPA", hidden=False)
         qr = segno.make(uri, error="m")
         buf = io.BytesIO()
         qr.save(buf, kind="svg", scale=10, border=2, dark="#0b0d12", light="#ffffff")
@@ -506,6 +784,8 @@ def main():
     except KeyboardInterrupt:
         print("\n  Stopping...")
     finally:
+        global _vault_key
+        _vault_key = None
         srv.server_close()
         for p in (DISH_PROXY, ROUTER_PROXY):
             try:

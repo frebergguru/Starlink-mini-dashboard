@@ -961,6 +961,91 @@ main {
   line-height: 1.5;
 }
 
+/* Vault gate modal */
+
+.vault-modal::backdrop {
+  background: rgba(3, 6, 11, 0.88);
+  backdrop-filter: blur(4px);
+}
+
+.vault-modal-body {
+  max-width: 380px;
+}
+
+.vault-modal-body h3 {
+  margin-bottom: 4px;
+}
+
+.vault-modal-body p.muted {
+  margin-top: 0;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.vault-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.vault-field span {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.vault-field input {
+  padding: 9px 12px;
+  background: rgba(5, 10, 18, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.vault-field input:focus {
+  outline: none;
+  border-color: rgba(86, 204, 242, 0.65);
+}
+
+.vault-error {
+  margin: 6px 0 0;
+  color: #ff8080;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.vault-actions {
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.btn-link {
+  font-size: 11px;
+  padding: 4px 0;
+  color: var(--text-mute);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-link:hover {
+  color: var(--text);
+}
+
+.btn-lock {
+  padding: 6px 10px;
+  font-size: 14px;
+  line-height: 1;
+}
+
 /* Radio stats */
 
 .radio-list {
