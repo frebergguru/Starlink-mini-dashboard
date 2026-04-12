@@ -96,6 +96,16 @@
           <a id="maps-link" class="btn btn-ghost hidden" target="_blank" rel="noopener" data-i18n="maps.open">Open in Google Maps ↗</a>
         </article>
 
+        <article class="card">
+          <header class="card-head"><h2 data-i18n="card.signal">Signal &amp; Ready States</h2></header>
+          <dl class="kv" id="kv-signal"></dl>
+        </article>
+
+        <article class="card">
+          <header class="card-head"><h2 data-i18n="card.device_info">Device Info</h2></header>
+          <dl class="kv" id="kv-device"></dl>
+        </article>
+
         <article class="card card-wide">
           <header class="card-head">
             <h2 data-i18n="card.alignment">Alignment</h2>
@@ -103,18 +113,17 @@
           </header>
           <div class="align-wrap">
             <svg id="align-svg" class="align-svg" viewBox="0 0 220 220" role="img" data-i18n-attr="aria-label:align.sky_view" aria-label="Dish sky view"></svg>
+            <svg id="align-compass-svg" class="align-svg hidden" viewBox="-26 -26 272 272" role="img" data-i18n-attr="aria-label:align.compass_view" aria-label="Dish compass view"></svg>
             <div class="align-legend">
               <span class="align-legend-item align-legend-current" data-i18n="align.current_boresight">Current boresight</span>
               <span class="align-legend-item align-legend-target" data-i18n="align.desired_target">Desired target</span>
             </div>
+            <div class="align-view-toggle">
+              <button id="btn-align-view" type="button" class="btn btn-ghost">Compass view</button>
+            </div>
           </div>
           <dl class="kv kv-inline" id="kv-alignment"></dl>
           <p class="muted small align-help" data-i18n="align.help">The alignment filter shows CONVERGED once the dish has a confident fix on its pointing direction. Other states (such as INITIALIZING or RESETTING) mean the estimate is still stabilising after boot, movement, or GPS loss — readings may be noisy until it converges.</p>
-        </article>
-
-        <article class="card">
-          <header class="card-head"><h2 data-i18n="card.signal">Signal &amp; Ready States</h2></header>
-          <dl class="kv" id="kv-signal"></dl>
         </article>
 
         <article class="card card-wide">
@@ -123,7 +132,7 @@
             <span class="muted" id="obs-grid-info"></span>
           </header>
           <div class="obs-wrap">
-            <svg id="obs-svg" class="obs-svg" role="img" data-i18n-attr="aria-label:obs.aria" aria-label="Obstruction map"></svg>
+            <canvas id="obs-canvas" class="obs-canvas" role="img" data-i18n-attr="aria-label:obs.aria" aria-label="Obstruction map"></canvas>
           </div>
           <dl class="kv kv-inline" id="kv-obstruction"></dl>
           <div class="legend">
@@ -131,11 +140,6 @@
             <span class="lg lg-partial"></span> <span data-i18n="obs.partial">partial</span>
             <span class="lg lg-blocked"></span> <span data-i18n="obs.blocked">blocked</span>
           </div>
-        </article>
-
-        <article class="card">
-          <header class="card-head"><h2 data-i18n="card.device_info">Device Info</h2></header>
-          <dl class="kv" id="kv-device"></dl>
         </article>
 
         <article class="card" id="card-routers">

@@ -1354,6 +1354,21 @@ main {
   height: 11px;
 }
 
+.align-view-toggle {
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.align-compass-dish {
+  filter: drop-shadow(0 0 14px var(--cyan-glow));
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 800ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms ease;
+  will-change: transform;
+}
+
 /* ───── Power draw hero (History tab) ───── */
 
 .power-hero {
@@ -1780,12 +1795,14 @@ code {
   padding: 12px 0;
 }
 
-.obs-svg {
+.obs-canvas {
   width: 100%;
-  max-width: 360px;
+  max-width: 420px;
   height: auto;
-  aspect-ratio: 1;
-  background: rgba(5, 10, 18, 0.6);
+  aspect-ratio: 5 / 4;
+  background:
+    radial-gradient(ellipse at 50% 60%, rgba(60, 110, 180, 0.12), transparent 70%),
+    rgba(5, 10, 18, 0.7);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }

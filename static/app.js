@@ -205,6 +205,39 @@
       confirmModal.addEventListener("close", handler);
     });
 
+  // ───── Alignment view toggle ─────
+
+  const ALIGN_VIEW_KEY = "starlink.alignment.view";
+
+  const applyAlignView = () => {
+    const skySvg = $("#align-svg");
+    const compassSvg = $("#align-compass-svg");
+    const legend = document.querySelector(".align-legend");
+    const btn = $("#btn-align-view");
+    if (!skySvg || !compassSvg || !btn) return;
+    skySvg.classList.toggle("hidden", alignView !== "sky");
+    compassSvg.classList.toggle("hidden", alignView !== "compass");
+    if (legend) legend.classList.toggle("hidden", alignView !== "sky");
+    btn.textContent = alignView === "sky"
+      ? i18n.t("align.switch_to_compass")
+      : i18n.t("align.switch_to_sky");
+  };
+
+  const initAlignmentToggle = () => {
+    try {
+      const saved = localStorage.getItem(ALIGN_VIEW_KEY);
+      if (saved === "compass" || saved === "sky") alignView = saved;
+    } catch {}
+    const btn = $("#btn-align-view");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      alignView = alignView === "sky" ? "compass" : "sky";
+      try { localStorage.setItem(ALIGN_VIEW_KEY, alignView); } catch {}
+      applyAlignView();
+    });
+    applyAlignView();
+  };
+
   // ───── Tab switching ─────
 
   const initTabs = () => {
@@ -1092,6 +1125,8 @@
   const ALIGN_CENTER = 110;
   const ALIGN_RADIUS = 92;
   let alignmentBackgroundBuilt = false;
+  let compassBackgroundBuilt = false;
+  let alignView = "sky";
 
   const buildAlignmentBackground = (svg) => {
     const ns = "http://www.w3.org/2000/svg";
@@ -1337,6 +1372,124 @@
       [i18n.t("kv.delta_azimuth"), deltaAz != null ? fmtDelta(deltaAz) : null, deltaClass(deltaAz)],
       [i18n.t("kv.delta_elevation"), deltaEl != null ? fmtDelta(deltaEl) : null, deltaClass(deltaEl)],
     ]);
+
+    renderCompassAlignment(alignment);
+  };
+
+  // ───── Alignment compass view ─────
+
+  const buildCompassBackground = (svg) => {
+    const ns = "http://www.w3.org/2000/svg";
+    const cx = ALIGN_CENTER;
+    const cy = ALIGN_CENTER;
+    const R = ALIGN_RADIUS;
+
+    const bg = document.createElementNS(ns, "circle");
+    bg.setAttribute("cx", cx);
+    bg.setAttribute("cy", cy);
+    bg.setAttribute("r", R + 6);
+    bg.setAttribute("fill", "rgba(5,10,18,0.65)");
+    bg.setAttribute("stroke", "rgba(86,204,242,0.15)");
+    bg.setAttribute("stroke-width", "1");
+    svg.appendChild(bg);
+
+    for (let i = 0; i < 72; i++) {
+      const rad = (i * 5 * Math.PI) / 180;
+      const dot = document.createElementNS(ns, "circle");
+      dot.setAttribute("cx", cx + R * Math.sin(rad));
+      dot.setAttribute("cy", cy - R * Math.cos(rad));
+      dot.setAttribute("r", i % 9 === 0 ? "1.6" : "0.9");
+      dot.setAttribute("fill", i % 9 === 0 ? "rgba(230,241,255,0.55)" : "rgba(138,160,191,0.35)");
+      svg.appendChild(dot);
+    }
+
+    const cardinals = [
+      ["N", cx, cy - R - 10, "#ffc35e"],
+      ["E", cx + R + 14, cy + 5, "#e6f1ff"],
+      ["S", cx, cy + R + 18, "#e6f1ff"],
+      ["W", cx - R - 14, cy + 5, "#e6f1ff"],
+    ];
+    for (const [text, x, y, color] of cardinals) {
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", x);
+      label.setAttribute("y", y);
+      label.setAttribute("fill", color);
+      label.setAttribute("font-size", "16");
+      label.setAttribute("font-weight", "700");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("font-family", "Inter, sans-serif");
+      label.textContent = text;
+      svg.appendChild(label);
+    }
+
+    const dishG = document.createElementNS(ns, "g");
+    dishG.setAttribute("id", "align-compass-dish");
+    dishG.classList.add("align-compass-dish");
+    dishG.style.opacity = "0";
+
+    // Invisible square centered on (cx, cy) so the group's fill-box center
+    // stays at (cx, cy) regardless of notch/stroke contributions to the bbox.
+    const anchorSize = 60;
+    const anchor = document.createElementNS(ns, "rect");
+    anchor.setAttribute("x", cx - anchorSize / 2);
+    anchor.setAttribute("y", cy - anchorSize / 2);
+    anchor.setAttribute("width", anchorSize);
+    anchor.setAttribute("height", anchorSize);
+    anchor.setAttribute("fill", "none");
+    anchor.setAttribute("stroke", "none");
+    anchor.setAttribute("pointer-events", "none");
+    dishG.appendChild(anchor);
+
+    const face = document.createElementNS(ns, "rect");
+    const size = 44;
+    face.setAttribute("x", cx - size / 2);
+    face.setAttribute("y", cy - size / 2);
+    face.setAttribute("width", size);
+    face.setAttribute("height", size);
+    face.setAttribute("rx", "5");
+    face.setAttribute("ry", "5");
+    face.setAttribute("fill", "rgba(86,204,242,0.10)");
+    face.setAttribute("stroke", "#e6f1ff");
+    face.setAttribute("stroke-width", "2.5");
+    dishG.appendChild(face);
+
+    const notch = document.createElementNS(ns, "path");
+    const n = 5;
+    const top = cy - size / 2;
+    notch.setAttribute("d", `M ${cx - n} ${top} L ${cx} ${top - n} L ${cx + n} ${top} Z`);
+    notch.setAttribute("fill", "#e6f1ff");
+    dishG.appendChild(notch);
+
+    svg.appendChild(dishG);
+  };
+
+  const renderCompassAlignment = (alignment) => {
+    const svg = $("#align-compass-svg");
+    if (!svg) return;
+    if (!compassBackgroundBuilt) {
+      buildCompassBackground(svg);
+      compassBackgroundBuilt = true;
+    }
+    const dish = svg.querySelector("#align-compass-dish");
+    if (!dish) return;
+
+    if (!alignment || typeof alignment !== "object") {
+      dish.style.opacity = "0";
+      return;
+    }
+
+    const az = Number(alignment.boresight_azimuth_deg);
+    const el = Number(alignment.boresight_elevation_deg);
+
+    if (!isFinite(az) || !isFinite(el)) {
+      dish.style.opacity = "0";
+      return;
+    }
+
+    dish.style.opacity = "1";
+    const elClamped = Math.max(0, Math.min(90, el));
+    const scaleY = 0.35 + 0.65 * Math.sin((elClamped * Math.PI) / 180);
+    dish.style.transform = `rotate(${az.toFixed(2)}deg) scaleY(${scaleY.toFixed(3)})`;
   };
 
   let lastLocation = null;
@@ -1368,44 +1521,265 @@
     }
   };
 
-  // ───── Obstruction map SVG ─────
+  // ───── Obstruction map (3D dome) ─────
+
+  const OBS_TILT = 0.55;              // ~31.5° pitch from horizontal
+  const OBS_YAW_PERIOD_MS = 40_000;   // one revolution every 40 s
+  const OBS_CELL_KIND = { CLEAR: 0, PARTIAL: 1, BLOCKED: 2 };
+
+  const obsState = {
+    cells: null,       // Float32Array: [x0,y0,z0,kind, ...]
+    count: 0,
+    rows: 0,
+    cols: 0,
+    yaw: 0,
+    rafHandle: 0,
+    lastTs: 0,
+  };
+
+  const classifySnr = (v) => {
+    const n = v == null ? -1 : Number(v);
+    if (!isFinite(n) || n < 0) return -1;
+    if (n > 0.8) return OBS_CELL_KIND.CLEAR;
+    if (n > 0.1) return OBS_CELL_KIND.PARTIAL;
+    return OBS_CELL_KIND.BLOCKED;
+  };
+
+  const rebuildObsCells = (snr, rows, cols) => {
+    const halfR = rows / 2;
+    const halfC = cols / 2;
+    const buf = new Float32Array(rows * cols * 4);
+    let n = 0;
+    for (let r = 0; r < rows; r++) {
+      const dy = (r + 0.5 - halfR) / halfR;
+      for (let c = 0; c < cols; c++) {
+        const dx = (c + 0.5 - halfC) / halfC;
+        const rho = Math.hypot(dx, dy);
+        if (rho > 1) continue;
+        const idx = r * cols + c;
+        if (idx >= snr.length) continue;
+        const kind = classifySnr(snr[idx]);
+        if (kind < 0) continue;
+        const el = (1 - rho) * (Math.PI / 2);
+        const az = Math.atan2(dx, -dy);
+        const cosEl = Math.cos(el);
+        const o = n * 4;
+        buf[o] = cosEl * Math.sin(az);       // x0
+        buf[o + 1] = Math.sin(el);            // y0
+        buf[o + 2] = cosEl * Math.cos(az);    // z0
+        buf[o + 3] = kind;
+        n++;
+      }
+    }
+    return { cells: buf.subarray(0, n * 4), count: n };
+  };
+
+  // Scratch buffer reused across frames: [px, py, kind]
+  let obsProjected = new Float32Array(0);
+
+  const drawObstructionDome = (ctx, W, H) => {
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2;
+    const cy = H * 0.58;
+    const R = Math.min(W * 0.42, H * 0.42);
+
+    const yaw = obsState.yaw;
+    const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+    const cosT = Math.cos(OBS_TILT), sinT = Math.sin(OBS_TILT);
+
+    // Ground shadow beneath the dome
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, sinT);
+    const shadow = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 1.15);
+    shadow.addColorStop(0, "rgba(0, 0, 0, 0.55)");
+    shadow.addColorStop(0.7, "rgba(0, 0, 0, 0.18)");
+    shadow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = shadow;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Data-driven dome: project every classified cell on the front-facing
+    // hemisphere. Clear cells → blue, partial → orange, blocked → red.
+    // Cells with no data (missing / below-horizon) are already excluded
+    // when the cell cache was built, so unscanned sky stays dark.
+    const cells = obsState.cells;
+    const count = obsState.count;
+    if (cells && count) {
+      if (obsProjected.length < count * 3) {
+        obsProjected = new Float32Array(count * 3);
+      }
+      const proj = obsProjected;
+      const cellStep = R / (Math.max(obsState.rows, obsState.cols) / 2);
+      const clearSize = Math.max(2.2, cellStep * 1.6);
+      const obsSize = Math.max(3, cellStep * 2.0);
+      let visible = 0;
+      for (let i = 0; i < count; i++) {
+        const o = i * 4;
+        const x0 = cells[o];
+        const y0 = cells[o + 1];
+        const z0 = cells[o + 2];
+        const kind = cells[o + 3];
+        const x1 = x0 * cosY + z0 * sinY;
+        const z1 = -x0 * sinY + z0 * cosY;
+        const y2 = y0 * cosT - z1 * sinT;
+        const z2 = y0 * sinT + z1 * cosT;
+        if (z2 < 0) continue;
+        const p = visible * 3;
+        proj[p] = cx + x1 * R;
+        proj[p + 1] = cy - y2 * R;
+        proj[p + 2] = kind;
+        visible++;
+      }
+
+      // Pass 1: clear cells as the dome fill
+      ctx.fillStyle = "rgba(74, 150, 235, 0.92)";
+      const cs = clearSize;
+      for (let i = 0; i < visible; i++) {
+        const p = i * 3;
+        if (proj[p + 2] !== OBS_CELL_KIND.CLEAR) continue;
+        ctx.fillRect(proj[p] - cs / 2, proj[p + 1] - cs / 2, cs, cs);
+      }
+      // Pass 2: partial cells
+      ctx.fillStyle = "rgba(255, 170, 80, 0.95)";
+      const os1 = obsSize * 0.9;
+      for (let i = 0; i < visible; i++) {
+        const p = i * 3;
+        if (proj[p + 2] !== OBS_CELL_KIND.PARTIAL) continue;
+        ctx.fillRect(proj[p] - os1 / 2, proj[p + 1] - os1 / 2, os1, os1);
+      }
+      // Pass 3: blocked cells on top
+      ctx.fillStyle = "rgba(255, 85, 95, 0.98)";
+      const os2 = obsSize;
+      for (let i = 0; i < visible; i++) {
+        const p = i * 3;
+        if (proj[p + 2] !== OBS_CELL_KIND.BLOCKED) continue;
+        ctx.fillRect(proj[p] - os2 / 2, proj[p + 1] - os2 / 2, os2, os2);
+      }
+    }
+
+    drawObstructionCompass(ctx, cx, cy, R, cosY, sinY, cosT, sinT);
+    drawObstructionDish(ctx, cx, cy, R);
+  };
+
+  const drawObstructionCompass = (ctx, cx, cy, R, cosY, sinY, cosT, sinT) => {
+    const ringR = R * 1.02;
+    ctx.save();
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(170, 190, 220, 0.45)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, ringR, ringR * sinT, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    const labels = [
+      { text: "N", az: 0 },
+      { text: "E", az: Math.PI / 2 },
+      { text: "S", az: Math.PI },
+      { text: "W", az: -Math.PI / 2 },
+    ];
+    ctx.save();
+    ctx.font = "600 13px -apple-system, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const labelR = ringR * 1.12;
+    for (const lab of labels) {
+      // Unit vector on horizon (el=0): (sin(az), 0, cos(az))
+      const sx0 = Math.sin(lab.az);
+      const sz0 = Math.cos(lab.az);
+      const x1 = sx0 * cosY + sz0 * sinY;
+      const z1 = -sx0 * sinY + sz0 * cosY;
+      const y2 = -z1 * sinT;
+      const z2 = z1 * cosT;
+      const px = cx + x1 * labelR;
+      const py = cy - y2 * labelR;
+      // Fade when behind (z2 < 0)
+      const alpha = z2 >= 0 ? 0.9 : 0.3;
+      ctx.fillStyle = `rgba(220, 230, 245, ${alpha})`;
+      ctx.fillText(lab.text, px, py);
+    }
+    ctx.restore();
+  };
+
+  const drawObstructionDish = (ctx, cx, cy, R) => {
+    const w = R * 0.18;
+    const h = w * 0.55;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.fillStyle = "rgba(235, 240, 250, 0.95)";
+    ctx.strokeStyle = "rgba(20, 30, 45, 0.8)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -h / 2);
+    ctx.lineTo(w / 2, 0);
+    ctx.lineTo(0, h / 2);
+    ctx.lineTo(-w / 2, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const obsShouldAnimate = () =>
+    document.visibilityState === "visible" && isTabVisible("telemetry");
+
+  const obsFrame = (ts) => {
+    obsState.rafHandle = requestAnimationFrame(obsFrame);
+    if (!obsShouldAnimate()) {
+      obsState.lastTs = ts;
+      return;
+    }
+    const canvas = document.getElementById("obs-canvas");
+    if (!canvas) return;
+
+    const dt = obsState.lastTs ? ts - obsState.lastTs : 16;
+    obsState.lastTs = ts;
+    obsState.yaw = (obsState.yaw + (dt / OBS_YAW_PERIOD_MS) * Math.PI * 2) % (Math.PI * 2);
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = canvas.clientWidth;
+    const cssH = canvas.clientHeight;
+    if (!cssW || !cssH) return;
+    const targetW = Math.round(cssW * dpr);
+    const targetH = Math.round(cssH * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawObstructionDome(ctx, cssW, cssH);
+  };
+
+  const ensureObsAnimation = () => {
+    if (obsState.rafHandle) return;
+    obsState.lastTs = 0;
+    obsState.rafHandle = requestAnimationFrame(obsFrame);
+  };
 
   const renderObstructionMap = (root) => {
     const om = unwrap(root, "dishGetObstructionMap", "dish_get_obstruction_map");
     const snr = (om && om.snr) || [];
     const rows = Number(pick(om, "num_rows", "numRows")) || 0;
     const cols = Number(pick(om, "num_cols", "numCols")) || 0;
-    const svg = $("#obs-svg");
-    svg.replaceChildren();
     $("#obs-grid-info").textContent = rows && cols ? `${cols}×${rows}` : "";
-    if (!rows || !cols || !snr.length) return;
 
-    const ns = "http://www.w3.org/2000/svg";
-    svg.setAttribute("viewBox", `0 0 ${cols} ${rows}`);
-    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-
-    const frag = document.createDocumentFragment();
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const idx = r * cols + c;
-        if (idx >= snr.length) continue;
-        const v = snr[idx];
-        const n = v == null ? -1 : Number(v);
-        let color;
-        if (!isFinite(n) || n < 0) color = "rgba(92,117,150,0.08)";
-        else if (n > 2) color = "#5cdf8f";
-        else if (n > 0.5) color = "#ffc35e";
-        else color = "#ff6b6b";
-        const rect = document.createElementNS(ns, "rect");
-        rect.setAttribute("x", c);
-        rect.setAttribute("y", r);
-        rect.setAttribute("width", 1);
-        rect.setAttribute("height", 1);
-        rect.setAttribute("fill", color);
-        frag.appendChild(rect);
-      }
+    if (!rows || !cols || !snr.length) {
+      obsState.cells = null;
+      obsState.count = 0;
+      obsState.rows = 0;
+      obsState.cols = 0;
+    } else {
+      const built = rebuildObsCells(snr, rows, cols);
+      obsState.cells = built.cells;
+      obsState.count = built.count;
+      obsState.rows = rows;
+      obsState.cols = cols;
     }
-    svg.appendChild(frag);
+    ensureObsAnimation();
   };
 
   // ───── History tab (power, outages, events) ─────
@@ -2156,6 +2530,7 @@
     sel.value = i18n.lang;
     sel.addEventListener("change", () => i18n.setLang(sel.value));
     i18n.onChange(() => {
+      applyAlignView();
       const state = currentState;
       if (state && state.dish && state.dish.connected) {
         refreshTelemetry();
@@ -2177,8 +2552,10 @@
     initConfig();
     initActions();
     initAdvanced();
+    initAlignmentToggle();
     initLangSwitcher();
     initLockButton();
+    ensureObsAnimation();
 
     // Populate the vault SSID cache once; fire migration in the background.
     loadVaultSsids(true).then(() => migrateLegacyWifi());
